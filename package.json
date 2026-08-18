@@ -1,0 +1,22 @@
+{
+  "name": "yinian-plugin-feishu",
+  "version": "0.1.0",
+  "description": "一念（Yinian）的飞书任务同步插件，OAuth device flow 直连，不依赖 lark-cli",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "doctor": "node scripts/doctor.mjs",
+    "test": "npm run build && node --test \"tests/**/*.test.mjs\"",
+    "verify": "npm run build && npm run doctor && node --test \"tests/**/*.test.mjs\"",
+    "pack:zip": "npm run build && node scripts/pack.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "typescript": "5.9.2"
+  }
+}

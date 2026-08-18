@@ -1,0 +1,32 @@
+{
+  "scope": "integration",
+  "fields": [
+    {
+      "key": "scopeNote",
+      "type": "note",
+      "label": "同步范围",
+      "text": "同步的是飞书里**指派给你的任务**（「我负责的」）。同步间隔、导入策略与是否自动回写在实例设置里调，不在这里。"
+    },
+    {
+      "key": "syncCompleted",
+      "type": "boolean",
+      "label": "同步已完成的任务",
+      "default": true,
+      "help": "关掉可以少一半请求量，但一念里就看不到飞书侧的历史完成记录"
+    },
+    {
+      "key": "advanced",
+      "type": "group",
+      "label": "高级",
+      "fields": [
+        {
+          "key": "detailBackfill",
+          "type": "boolean",
+          "label": "补齐开始时间与完成时间",
+          "default": true,
+          "help": "列表接口不给这两个字段，需要每条任务多发一次请求。关掉会快很多，但跨天任务只剩截止那天、历史完成时间会缺失"
+        }
+      ]
+    }
+  ]
+}

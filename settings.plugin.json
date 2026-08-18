@@ -1,0 +1,58 @@
+{
+  "scope": "plugin",
+  "fields": [
+    {
+      "key": "howto",
+      "type": "note",
+      "label": "准备工作",
+      "text": "在[飞书开放平台](https://open.feishu.cn/app)建一个**自建应用**，开启「设备码流程」，并申请权限 `task:task:read`、`task:task:write`、`offline_access`。然后把凭据填在下面。"
+    },
+    {
+      "key": "brand",
+      "type": "enum",
+      "label": "版本",
+      "required": true,
+      "default": "feishu",
+      "options": [
+        { "value": "feishu", "label": "飞书（中国版）" },
+        { "value": "lark", "label": "Lark（国际版）" }
+      ],
+      "help": "选错会一直报「应用不存在」，两个版本的账号体系是分开的"
+    },
+    {
+      "key": "appId",
+      "type": "string",
+      "label": "App ID",
+      "required": true,
+      "placeholder": "cli_xxxxxxxxxxxx"
+    },
+    {
+      "key": "appSecret",
+      "type": "string",
+      "label": "App Secret",
+      "format": "secret",
+      "required": true,
+      "help": "存进本机加密文件（0600），界面永不回显，日志自动脱敏"
+    },
+    {
+      "key": "startAuthorization",
+      "type": "action",
+      "label": "开始授权",
+      "rpc": "feishu.startAuthorization",
+      "help": "会打开浏览器让你确认用户码并同意。一念不需要回调地址"
+    },
+    {
+      "key": "checkAuthorization",
+      "type": "action",
+      "label": "检查授权",
+      "rpc": "feishu.checkAuthorization",
+      "help": "在浏览器点完同意后点它确认；也可以直接点启用，会自动等一会儿"
+    },
+    {
+      "key": "authorizationStatus",
+      "type": "action",
+      "label": "查看授权状态",
+      "rpc": "feishu.authorizationStatus"
+    }
+  ]
+}

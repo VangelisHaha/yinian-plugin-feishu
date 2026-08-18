@@ -1,0 +1,45 @@
+{
+  "manifestVersion": 1,
+  "id": "yinian-feishu",
+  "name": "飞书任务",
+  "version": "0.1.0",
+  "author": "vangelis",
+  "description": "把飞书「我的任务」同步进一念，完成与重开双向回写",
+  "homepage": "https://github.com/VangelisHaha/yinian-plugin-feishu",
+  "minHostVersion": "0.5.0",
+  "runtime": {
+    "kind": "process",
+    "node": ">=20",
+    "entry": {
+      "default": "dist/main.mjs"
+    }
+  },
+  "permissions": {
+    "net": [
+      "open.feishu.cn",
+      "accounts.feishu.cn",
+      "open.larksuite.com",
+      "accounts.larksuite.com"
+    ],
+    "spawn": [],
+    "fs": [],
+    "api": []
+  },
+  "contributes": {
+    "sync": {
+      "resources": ["task"],
+      "capabilities": {
+        "actions": ["list", "get", "update", "complete", "reopen"],
+        "fields": ["title", "notes", "due_at"]
+      }
+    },
+    "syncStrategy": {
+      "modes": ["interval", "manual"],
+      "defaultIntervalSeconds": 300,
+      "minIntervalSeconds": 60
+    },
+    "hooks": [],
+    "settingsPanel": ["settings.plugin.json", "settings.integration.json"]
+  },
+  "authMode": ["oauth-device"]
+}

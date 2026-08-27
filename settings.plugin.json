@@ -5,7 +5,7 @@
       "key": "howto",
       "type": "note",
       "label": "准备工作",
-      "text": "在[飞书开放平台](https://open.feishu.cn/app)建一个**自建应用**，开启「设备码流程」，并申请权限：任务 `task:task:read`、`task:task:write`；日历 `calendar:calendar:read`、`calendar:calendar.event:read`；再加 `offline_access`。改过权限后要**重新授权一次**，刷新拿不到新权限。"
+      "text": "在[飞书开放平台](https://open.feishu.cn/app)建一个**自建应用**，开启「设备码流程」，并申请权限：任务 `task:task:read`、`task:task:write`；日历 `calendar:calendar:read`、`calendar:calendar.event:read`；临时会议 `vc:meeting.search:read`、`vc:meeting:readonly`、`vc:meeting.meetingevent:read`；再加 `offline_access`。改过权限后要**重新授权一次**，刷新拿不到新权限。"
     },
     {
       "key": "brand",

@@ -1,6 +1,6 @@
 {
   "name": "yinian-plugin-feishu",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "一念（Yinian）的飞书任务同步插件，OAuth device flow 直连，不依赖 lark-cli",
   "type": "module",
   "private": true,

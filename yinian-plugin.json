@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "yinian-feishu",
   "name": "飞书",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "vangelis",
   "description": "把飞书任务与日历（含会议）同步进一念，并把一念的提醒发到飞书",
   "homepage": "https://github.com/VangelisHaha/yinian-plugin-feishu",
@@ -21,7 +21,7 @@
       "open.larksuite.com",
       "accounts.larksuite.com"
     ],
-    "spawn": [],
+    "spawn": ["/bin/ps"],
     "fs": [],
     "api": []
   },
@@ -35,7 +35,7 @@
     },
     "syncStrategy": {
       "modes": ["interval", "manual"],
-      "defaultIntervalSeconds": 300,
+      "defaultIntervalSeconds": 60,
       "minIntervalSeconds": 60
     },
     "notificationChannel": {

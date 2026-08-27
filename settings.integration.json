@@ -22,6 +22,13 @@
       "help": "外部日历在一念里是**只读**的：飞书里的日程改了会同步过来，一念这侧改不了（想改就手工建一个日程）"
     },
     {
+      "key": "syncVcMeetings",
+      "type": "boolean",
+      "label": "同步临时视频会议",
+      "default": false,
+      "help": "检测本机正在参加的飞书会议，并补齐未排入日历的临时会议。需要重新授权视频会议只读权限"
+    },
+    {
       "key": "calendars",
       "type": "multi-enum",
       "label": "同步哪些日历",

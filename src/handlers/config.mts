@@ -94,13 +94,11 @@ export async function checkAuthorization(params: {
 
   const dataDir = context().dataDir;
   const existing = loadToken(dataDir);
-  if (existing && Date.now() < existing.refreshExpiresAt) {
-    return { message: authorizedMessage(existing) };
-  }
-
   const pending = takePendingDevice(dataDir);
   if (!pending) {
-    return { message: "请先点「开始授权」" };
+    return existing && Date.now() < existing.refreshExpiresAt
+      ? { message: authorizedMessage(existing) }
+      : { message: "请先点「开始授权」" };
   }
 
   try {
@@ -132,13 +130,10 @@ export async function validate(
 
   const dataDir = context().dataDir;
   const existing = loadToken(dataDir);
-  if (existing && Date.now() < existing.refreshExpiresAt) {
-    return { ok: true };
-  }
-
   // 用户可能刚在浏览器点完同意就直接点了启用，这里替他把最后一步走完
   const pending = takePendingDevice(dataDir);
   if (!pending) {
+    if (existing && Date.now() < existing.refreshExpiresAt) return { ok: true };
     return {
       ok: false,
       errors: [

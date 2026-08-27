@@ -1,12 +1,12 @@
 {
   "manifestVersion": 1,
   "id": "yinian-feishu",
-  "name": "飞书任务",
-  "version": "0.1.0",
+  "name": "飞书",
+  "version": "0.2.0",
   "author": "vangelis",
-  "description": "把飞书「我的任务」同步进一念，完成与重开双向回写",
+  "description": "把飞书任务与日历（含会议）同步进一念，并把一念的提醒发到飞书",
   "homepage": "https://github.com/VangelisHaha/yinian-plugin-feishu",
-  "minHostVersion": "0.5.0",
+  "minHostVersion": "0.6.0",
   "runtime": {
     "kind": "process",
     "node": ">=20",
@@ -27,7 +27,7 @@
   },
   "contributes": {
     "sync": {
-      "resources": ["task"],
+      "resources": ["task", "event"],
       "capabilities": {
         "actions": ["list", "get", "update", "complete", "reopen"],
         "fields": ["title", "notes", "due_at"]
@@ -37,6 +37,11 @@
       "modes": ["interval", "manual"],
       "defaultIntervalSeconds": 300,
       "minIntervalSeconds": 60
+    },
+    "notificationChannel": {
+      "id": "feishu",
+      "name": "飞书",
+      "supportsActions": false
     },
     "hooks": [],
     "settingsPanel": ["settings.plugin.json", "settings.integration.json"]

@@ -9,16 +9,12 @@
  */
 
 import { logger } from "../sdk/index.mjs";
-import {
-  AuthError,
-  ensureAccessToken,
-  type Credentials,
-} from "./auth.mjs";
+import { type Credentials } from "./auth.mjs";
+import { apiRequest, FeishuApiError } from "./request.mjs";
 
-const OPEN_BASE = {
-  feishu: "https://open.feishu.cn",
-  lark: "https://open.larksuite.com",
-} as const;
+// 鉴权、错误码归类与重试判定统一在 request.mts，这里只管任务 API 的路径与载荷。
+// 老代码从 client.mjs import 过 FeishuApiError，继续导出，别让调用方跟着改
+export { FeishuApiError };
 
 /** 列表接口的单页上限。 */
 const PAGE_SIZE = 50;
@@ -50,18 +46,7 @@ export interface TaskPage {
   hasMore: boolean;
 }
 
-/** API 调用失败。`retryable` 决定宿主要不要重试。 */
-export class FeishuApiError extends Error {
-  constructor(
-    message: string,
-    readonly code: number,
-    readonly retryable: boolean,
-  ) {
-    super(message);
-    this.name = "FeishuApiError";
-  }
-}
-
+/** API 调用失败的类型定义在 `request.mts`，这里只做任务 API 的薄封装。 */
 export class FeishuClient {
   #credentials: Credentials;
   #dataDir: string;
@@ -71,73 +56,19 @@ export class FeishuClient {
     this.#dataDir = dataDir;
   }
 
-  get #base(): string {
-    return OPEN_BASE[this.#credentials.brand] ?? OPEN_BASE.feishu;
-  }
-
-  async #request<T>(
+  #request<T>(
     method: "GET" | "PATCH",
     path: string,
     options: { query?: Record<string, string>; body?: unknown } = {},
   ): Promise<T> {
-    const token = await ensureAccessToken(this.#credentials, this.#dataDir);
-    const url = new URL(`${this.#base}${path}`);
-    for (const [key, value] of Object.entries(options.query ?? {})) {
-      url.searchParams.set(key, value);
-    }
-
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          ...(options.body ? { "Content-Type": "application/json" } : {}),
-        },
-        ...(options.body ? { body: JSON.stringify(options.body) } : {}),
-      });
-    } catch (error) {
-      // 网络问题是时机问题，值得重试
-      throw new FeishuApiError(
-        `请求飞书失败：${error instanceof Error ? error.message : String(error)}`,
-        -1,
-        true,
-      );
-    }
-
-    const text = await response.text();
-    let payload: { code?: number; msg?: string; data?: T };
-    try {
-      payload = JSON.parse(text) as typeof payload;
-    } catch {
-      throw new FeishuApiError(
-        `飞书返回非 JSON（HTTP ${response.status}）：${text.slice(0, 200)}`,
-        response.status,
-        // 5xx 大概是临时故障，4xx 不是
-        response.status >= 500,
-      );
-    }
-
-    if (payload.code !== 0) {
-      const code = payload.code ?? response.status;
-      // 99991663 / 99991661 这类是 token 失效。走到这里说明刷新也没救回来，
-      // 报成不可重试，让用户去重新授权——重试只会一直撞同一堵墙
-      const tokenExpired = code === 99991663 || code === 99991661 || response.status === 401;
-      if (tokenExpired) {
-        throw new AuthError(
-          `飞书授权已失效（code ${code}），请重新授权`,
-          "expired",
-        );
-      }
-      throw new FeishuApiError(
-        `飞书接口报错 ${code}：${payload.msg ?? "未知错误"}`,
-        code,
-        // 限流与服务端错误可以重试
-        code === 99991400 || response.status === 429 || response.status >= 500,
-      );
-    }
-
-    return payload.data as T;
+    return apiRequest<T>({
+      credentials: this.#credentials,
+      dataDir: this.#dataDir,
+      method,
+      path,
+      ...(options.query ? { query: options.query } : {}),
+      ...(options.body === undefined ? {} : { body: options.body }),
+    });
   }
 
   /** 列「我的任务」的一页。`completed` 分开拉：接口不会在一次结果里混两种状态。 */

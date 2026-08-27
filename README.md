@@ -1,6 +1,12 @@
 # yinian-plugin-feishu
 
-把飞书「我的任务」同步进 [一念（Yinian）](https://github.com/VangelisHaha/nikou-agenda)，完成与重开双向回写。
+一个插件，三件事，接进 [一念（Yinian）](https://github.com/VangelisHaha/nikou-agenda)：
+
+| 能力 | 方向 | 说明 |
+|---|---|---|
+| 飞书任务 | **双向** | 「我负责的」任务同步进来，完成与重开回写回去 |
+| 飞书日历与会议 | **单向（pull-only）** | 日程与视频会议同步成一念的**只读**日历事件 |
+| 飞书通知 | 出站 | 一念的提醒发到飞书（群机器人 Webhook 或给自己发单聊） |
 
 **不依赖 `lark-cli`**，也不需要回调地址：填 App ID 与 App Secret，在浏览器点一次同意就好（OAuth 2.0 Device Flow）。
 
@@ -8,9 +14,19 @@
 
 1. 去[飞书开放平台](https://open.feishu.cn/app)建一个**自建应用**。
 2. 开启**设备码流程**（Device Flow）。
-3. 申请权限：`task:task:read`、`task:task:write`、`offline_access`。
+3. 申请权限：
+
+   | 用途 | scope |
+   |---|---|
+   | 任务同步 | `task:task:read`、`task:task:write` |
+   | 日历与会议同步 | `calendar:calendar:read`、`calendar:calendar.event:read` |
+   | 通知发到自己的单聊（可选） | `im:message.send_as_user` |
+   | 拿 refresh_token | `offline_access` |
 
    `offline_access` 不能省——没有它拿不到 `refresh_token`，每 2 小时就要重新授权一次。
+   **改过权限要重新点一次「开始授权」**：刷新 token 拿不到新增的 scope。
+
+   通知走群机器人 Webhook 的话不需要任何额外 scope。
 
 国际版（Lark）也支持，在设置里把「版本」切成 Lark 即可。两个版本的账号体系是分开的，选错会一直报「应用不存在」。
 
@@ -28,6 +44,8 @@ npm run pack:zip   # 产出 release/yinian-feishu-v<版本>.zip
 
 ## 同步范围与语义
 
+### 任务（双向）
+
 | 项 | 行为 |
 |---|---|
 | 拉什么 | 飞书里**指派给你的任务**（「我负责的」），未完成与已完成各拉一遍 |
@@ -38,6 +56,37 @@ npm run pack:zip   # 产出 release/yinian-feishu-v<版本>.zip
 | 回写 | 完成、重开、改标题/描述/截止时间 |
 | 飞书没有的概念 | 优先级、标签、取消状态。宿主不会下发这些字段；真收到 `cancel` 会按完成处理 |
 | 删除 | **不上报**。飞书列表不区分「任务被删」与「任务被移出我的名下」，误报会让一念标记一堆假的「外部已删除」 |
+
+### 日历与会议（pull-only，远端权威）
+
+| 项 | 行为 |
+|---|---|
+| 拉什么 | 实例设置里选中的日历；**留空只同步主日历**。窗口默认过去 7 天 ~ 未来 90 天，可调 |
+| 用哪个接口 | `events/instance_view`，拿的是**展开后的重复日程实例**。一念一期不展开 RRULE，拉原始 event 的话每周例会在日历上只会出现一次 |
+| 事件 id | `<event_id>@<实例开始时间>`。同一个 `event_id` 会返回多个实例，不带开始时间会互相覆盖 |
+| 全天日程 | 飞书给的结束日**已经是右开区间**，原样传，不加减一天 |
+| 会议信息 | 会议链接、地点、参与人数、我的回复进事件详情的「来源」区（契约的 `details`），不进主模型 |
+| 忙闲 / 回复 | `free_busy_status`、`self_rsvp_status` 映射成一念的 `busyStatus` / `responseStatus` |
+| 可编辑性 | 外部日历在一念里是**只读**的。想改就手工建一个 Event——远端权威下两边各改一半，结果和两边都不一致 |
+| 取消 | 飞书返回 `status: cancelled` 的日程照样同步，事件变成「已取消」。**没同步过的已取消日程直接跳过**，凭空出现一条取消事件只是噪声 |
+| 删除 | 上一轮在窗口内见过、这一轮没见到 → 报删除。**只报仍落在窗口内的**，否则每轮都会把刚滑出窗口的日程误报成删除 |
+| `eventsComplete` | **一直是 `false`**。我们拉的是滚动窗口不是完整集合，开了它会让上周的会集体变成「已取消」 |
+
+想让任务与日历各用一个同步间隔，就建两个实例，一个关掉「同步飞书任务」、另一个关掉「同步飞书日历与会议」。
+
+### 通知（出站）
+
+在插件设置里配好投递方式，再去**设置 → 提醒与通知**里打开「飞书」这个渠道。
+
+| 方式 | 需要什么 | 适合 |
+|---|---|---|
+| 群机器人 Webhook（默认） | 一个 Webhook 地址，零额外权限 | 建一个只有自己的群，最快能用 |
+| 给自己发单聊 | `im:message.send_as_user` + 重新授权 | 不想建群 |
+
+- 按 `notification.id` 幂等：推迟后复弹、宿主重启补发都不会刷第二条。发消息时还会带飞书自己的 `uuid` 去重键，本地记账丢了也不会重出。
+- **没有动作按钮**（`supportsActions: false`）：飞书卡片按钮要回调公网地址，插件收不到。完成 / 推迟 / 知晓在一念的浮窗与标题栏提醒收件箱里操作。
+- 静默时段、按类型订阅、渠道开关全由一念统一管，插件只负责投递。
+- 投递失败只记日志并把原因回给宿主，**绝不抛异常**——抛了会算进插件失败次数，五次烧开断路器会把任务与日历同步一起停摆。
 
 ## 为什么要补详情
 
@@ -69,15 +118,19 @@ npm run pack:zip   # 产出 release/yinian-feishu-v<版本>.zip
 | 拿不到 `refresh_token` | 权限里漏了 `offline_access` |
 | 完成时间都是今天 | 详情补齐被关掉了 |
 | 任务差一天 | 全天任务按本机时区解释日期，检查系统时区 |
+| 日历一条都没同步 | 权限里漏了 `calendar:calendar:read` / `calendar:calendar.event:read`，或补权限后没重新授权 |
+| 日程超出窗口没同步 | 实例设置里调「日历往前/往后同步几天」。窗口外的既不同步，也不会被误判成删除 |
+| 通知没收到 | 先在插件设置里点「发送测试通知」定位是配置问题还是订阅问题；再确认一念的通知总开关与「飞书」渠道开关都开着 |
+| 「Webhook 地址不是飞书自定义机器人的地址」 | 粘成了群分享链接。要的是群设置 → 群机器人 → 自定义机器人里那条 `https://open.feishu.cn/open-apis/bot/v2/hook/...` |
 
 ## 开发
 
 ```bash
 npm run typecheck
 npm run doctor      # 契约自检：manifest、设置面板、权限声明与实际调用
-npm test            # 54 个测试，不发真实请求
+npm test            # 105 个测试，不发真实请求
 ```
 
-测试用替换 `globalThis.fetch` 的方式驱动，覆盖时间映射、Device Flow 的各个轮询分支、token 刷新与 API 错误分类。**真机验收仍然必要**——单测替代不了「凭据真的能换出 token」。
+测试用替换 `globalThis.fetch` 的方式驱动，覆盖时间映射（任务用**毫秒**、日历用**秒**）、全天日程的右开区间、删除记账的窗口判定、Device Flow 的各个轮询分支、token 刷新、API 错误分类与通知幂等。**真机验收仍然必要**——单测替代不了「凭据真的能换出 token」。
 
 契约见一念仓库的 [`docs/11-plugin-architecture.md`](https://github.com/VangelisHaha/nikou-agenda/blob/main/docs/11-plugin-architecture.md)，SDK 与工具来自[官方模板](https://github.com/VangelisHaha/yinian-plugin-template)。

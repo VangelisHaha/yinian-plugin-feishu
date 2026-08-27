@@ -505,7 +505,12 @@ function checkPermissionUsage(manifest) {
       what: "发起网络请求（http/https 模块）",
     },
     {
-      pattern: /\b(?:spawn|spawnSync|exec|execFile|execSync)\s*\(/,
+      // 只认 child_process 的调用形态。**不能写成 `\b(?:exec|spawn)\s*\(`**：
+      // 那样 `/正则/.exec(s)` 和 `pattern.exec(s)` 也会中招，任何用正则的插件都会
+      // 被误判成「执行外部命令」。所以要么是裸调用（import 进来的），要么是挂在
+      // child_process / cp 这类模块对象上。
+      pattern:
+        /(?<![.\w$])(?:spawn|spawnSync|execFile|execFileSync|execSync)\s*\(|\b(?:child_process|childProcess|cp)\.(?:spawn|spawnSync|exec|execFile|execSync)\s*\(|(?<![.\w$])exec\s*\(\s*["'`]/,
       declared: declaredSpawn,
       key: "spawn",
       what: "执行外部命令",
@@ -529,7 +534,11 @@ function checkPermissionUsage(manifest) {
   }
   if (
     declaredSpawn &&
-    !sources.some((file) => /\b(?:spawn|exec|execFile)\s*\(/.test(file.text))
+    !sources.some((file) =>
+      /(?<![.\w$])(?:spawn|spawnSync|execFile|execFileSync)\s*\(|\b(?:child_process|childProcess|cp)\.(?:spawn|exec|execFile)\s*\(/.test(
+        file.text,
+      ),
+    )
   ) {
     warn(where, "声明了 spawn 权限但源码里没看到起子进程，考虑去掉");
   }

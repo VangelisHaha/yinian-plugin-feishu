@@ -20,8 +20,9 @@ import type {
   PushRequest,
   PushResult,
 } from "../sdk/index.mjs";
-import { AuthError, type Brand, type Credentials } from "../feishu/auth.mjs";
+import { AuthError } from "../feishu/auth.mjs";
 import { FeishuClient, type FeishuTask } from "../feishu/client.mjs";
+import { configOf, credentialsFrom } from "../feishu/pluginConfig.mjs";
 import {
   applyDetail,
   needsDetail,
@@ -29,6 +30,7 @@ import {
   toUpdatePayload,
 } from "../feishu/mapping.mjs";
 import { toExternalItem } from "../feishu/mapping.mjs";
+import { pull as pullEvents } from "./syncEvent.mjs";
 
 /** 同时最多发几个详情请求。太高会撞飞书限流，太低补不完。 */
 const DETAIL_CONCURRENCY = 4;
@@ -37,16 +39,8 @@ const DETAIL_MAX_PER_ROUND = 80;
 /** 一次 pull 最多翻多少页列表。50 条一页，40 页 = 2000 条，够个人用量。 */
 const MAX_PAGES = 40;
 
-export function credentialsFrom(config: Record<string, unknown>): Credentials {
-  const appId = String(config["appId"] ?? "").trim();
-  const appSecret = String(config["appSecret"] ?? "").trim();
-  const brand = (config["brand"] === "lark" ? "lark" : "feishu") as Brand;
-  return { appId, appSecret, brand };
-}
-
-function client(): FeishuClient {
-  const ctx = context();
-  return new FeishuClient(credentialsFrom(ctx.config), ctx.dataDir);
+function client(config: Record<string, unknown>): FeishuClient {
+  return new FeishuClient(credentialsFrom(config), context().dataDir);
 }
 
 /**
@@ -74,11 +68,21 @@ export function mergeTasks(
 }
 
 export async function pull(request: PullRequest): Promise<PullResult> {
-  const ctx = context();
-  const api = client();
-  // config 是插件级与实例级合并后的结果，两级的键在这里都能读到
-  const syncCompleted = ctx.config["syncCompleted"] !== false;
-  const detailBackfill = ctx.config["detailBackfill"] !== false;
+  // 宿主按 manifest 声明的 resources 逐个调用，task 与 event 是两次独立的 pull
+  if (request.resource === "event") {
+    return pullEvents(request);
+  }
+
+  const config = configOf(request);
+  // 用户可以把一个实例设成「只同步日历」。返回空 items 是安全的：
+  // task 的删除只认 deletedExternalIds，不会因为这轮没给条目就动本地数据
+  if (config["syncTasks"] === false) {
+    return { items: [], hasMore: false, deletedExternalIds: [] };
+  }
+
+  const api = client(config);
+  const syncCompleted = config["syncCompleted"] !== false;
+  const detailBackfill = config["detailBackfill"] !== false;
 
   const [open, done] = await Promise.all([
     listAll(api, false, request.traceId),
@@ -191,7 +195,7 @@ async function backfillDetails(
 }
 
 export async function push(request: PushRequest): Promise<PushResult> {
-  const api = client();
+  const api = client(configOf(request));
   const guid = request.externalId;
   if (!guid) {
     // 一期不做双向创建，宿主也不会下发 create

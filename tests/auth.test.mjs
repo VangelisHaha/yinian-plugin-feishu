@@ -20,11 +20,14 @@ import { afterEach, describe, it } from "node:test";
 
 import {
   AuthError,
+  forgetPendingDevice,
   loadToken,
   pollDeviceToken,
   refreshToken,
+  rememberPendingDevice,
   requestDeviceCode,
   saveToken,
+  takePendingDevice,
 } from "../dist/feishu/auth.mjs";
 import { FeishuApiError, FeishuClient } from "../dist/feishu/client.mjs";
 
@@ -262,6 +265,57 @@ describe("token 持久化", () => {
     const path = join(dir, "token.json");
     writeFileSync(path, readFileSync(path, "utf8").slice(0, 5));
     assert.equal(loadToken(dir), null);
+  });
+});
+
+describe("设备码持久化", () => {
+  /** 一个还没过期的设备码。 */
+  function device(overrides = {}) {
+    return {
+      deviceCode: "dc-1",
+      userCode: "ABCD-1234",
+      verificationUri: "https://accounts.feishu.cn/open-apis/x",
+      expiresAt: Date.now() + 300_000,
+      intervalMs: 5000,
+      ...overrides,
+    };
+  }
+
+  // 这是「开始授权」到「检查授权」之间唯一的传递通道：启用之前两个 action 各自
+  // 跑在一个用完就回收的临时进程里，存内存等于每次都丢。
+  it("以 0600 落盘并可跨进程读回", () => {
+    const dir = tempDir();
+    const pending = device();
+
+    rememberPendingDevice(dir, pending);
+
+    const mode = statSync(join(dir, "pending-device.json")).mode & 0o777;
+    assert.equal(mode, 0o600);
+    assert.deepEqual(takePendingDevice(dir), pending);
+  });
+
+  it("没走过开始授权时返回 null", () => {
+    assert.equal(takePendingDevice(tempDir()), null);
+  });
+
+  it("过期的设备码读不出来，并且顺手清掉", () => {
+    const dir = tempDir();
+    rememberPendingDevice(dir, device({ expiresAt: Date.now() - 1 }));
+
+    assert.equal(takePendingDevice(dir), null);
+    assert.throws(
+      () => statSync(join(dir, "pending-device.json")),
+      "过期的设备码不该留在盘上",
+    );
+  });
+
+  it("清掉之后就取不到了，重复清不报错", () => {
+    const dir = tempDir();
+    rememberPendingDevice(dir, device());
+
+    forgetPendingDevice(dir);
+    assert.equal(takePendingDevice(dir), null);
+    forgetPendingDevice(dir);
   });
 });
 

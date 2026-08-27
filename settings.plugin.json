@@ -5,7 +5,7 @@
       "key": "howto",
       "type": "note",
       "label": "准备工作",
-      "text": "在[飞书开放平台](https://open.feishu.cn/app)建一个**自建应用**，开启「设备码流程」，并申请权限 `task:task:read`、`task:task:write`、`offline_access`。然后把凭据填在下面。"
+      "text": "在[飞书开放平台](https://open.feishu.cn/app)建一个**自建应用**，开启「设备码流程」，并申请权限：任务 `task:task:read`、`task:task:write`；日历 `calendar:calendar:read`、`calendar:calendar.event:read`；再加 `offline_access`。改过权限后要**重新授权一次**，刷新拿不到新权限。"
     },
     {
       "key": "brand",
@@ -53,6 +53,45 @@
       "type": "action",
       "label": "查看授权状态",
       "rpc": "feishu.authorizationStatus"
+    },
+    {
+      "key": "notify",
+      "type": "group",
+      "label": "把一念的提醒发到飞书",
+      "fields": [
+        {
+          "key": "notifyNote",
+          "type": "note",
+          "label": "说明",
+          "text": "配好之后要在**设置 → 提醒与通知**里打开「飞书」这个渠道才会真的发。静默时段、按类型订阅都由一念统一管，这里只配怎么送。"
+        },
+        {
+          "key": "notifyMode",
+          "type": "enum",
+          "label": "投递方式",
+          "default": "webhook",
+          "options": [
+            { "value": "webhook", "label": "群机器人 Webhook（推荐）" },
+            { "value": "selfDm", "label": "给自己发单聊" }
+          ],
+          "help": "Webhook 不需要额外权限，把地址填进来就能用；单聊要在开放平台补 im:message.send_as_user 并重新授权"
+        },
+        {
+          "key": "notifyWebhookUrl",
+          "type": "string",
+          "label": "Webhook 地址",
+          "format": "secret",
+          "visibleWhen": { "field": "notifyMode", "equals": "webhook" },
+          "help": "飞书群 → 设置 → 群机器人 → 添加自定义机器人，复制它的 Webhook 地址。建议建一个只有自己的群"
+        },
+        {
+          "key": "testNotification",
+          "type": "action",
+          "label": "发送测试通知",
+          "rpc": "feishu.testNotification",
+          "help": "不经过一念的提醒调度，直接按上面的配置发一条"
+        }
+      ]
     }
   ]
 }

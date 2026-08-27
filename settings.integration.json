@@ -5,13 +5,37 @@
       "key": "scopeNote",
       "type": "note",
       "label": "同步范围",
-      "text": "同步的是飞书里**指派给你的任务**（「我负责的」）。同步间隔、导入策略与是否自动回写在实例设置里调，不在这里。"
+      "text": "任务同步的是飞书里**指派给你的任务**（「我负责的」）；日历同步的是你选的那几个日历里的日程与会议。同步间隔、导入策略与是否自动回写在实例设置里调，不在这里。"
+    },
+    {
+      "key": "syncTasks",
+      "type": "boolean",
+      "label": "同步飞书任务",
+      "default": true,
+      "help": "关掉后这个实例只同步日历。想让任务与日历各用一个同步间隔，就建两个实例、各关一边"
+    },
+    {
+      "key": "syncCalendars",
+      "type": "boolean",
+      "label": "同步飞书日历与会议",
+      "default": true,
+      "help": "外部日历在一念里是**只读**的：飞书里的日程改了会同步过来，一念这侧改不了（想改就手工建一个日程）"
+    },
+    {
+      "key": "calendars",
+      "type": "multi-enum",
+      "label": "同步哪些日历",
+      "optionsFrom": "rpc:feishu.listCalendars",
+      "maxItems": 10,
+      "visibleWhen": { "field": "syncCalendars", "equals": true },
+      "help": "留空只同步主日历。会议室这类资源日历别选，那是别人的忙闲"
     },
     {
       "key": "syncCompleted",
       "type": "boolean",
       "label": "同步已完成的任务",
       "default": true,
+      "visibleWhen": { "field": "syncTasks", "equals": true },
       "help": "关掉可以少一半请求量，但一念里就看不到飞书侧的历史完成记录"
     },
     {
@@ -25,6 +49,24 @@
           "label": "补齐开始时间与完成时间",
           "default": true,
           "help": "列表接口不给这两个字段，需要每条任务多发一次请求。关掉会快很多，但跨天任务只剩截止那天、历史完成时间会缺失"
+        },
+        {
+          "key": "calendarPastDays",
+          "type": "integer",
+          "label": "日历往前同步几天",
+          "default": 7,
+          "min": 0,
+          "max": 90,
+          "help": "拉太多历史日程没什么用，还会让每轮同步多翻几个分片"
+        },
+        {
+          "key": "calendarFutureDays",
+          "type": "integer",
+          "label": "日历往后同步几天",
+          "default": 90,
+          "min": 1,
+          "max": 365,
+          "help": "窗口外的日程不会同步，也不会被误判成删除"
         }
       ]
     }

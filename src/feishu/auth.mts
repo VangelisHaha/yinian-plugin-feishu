@@ -15,7 +15,13 @@
  * 由宿主管理；这是运行时产物，插件自己负责。
  */
 
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 
 import { logger } from "../sdk/index.mjs";
@@ -349,15 +355,53 @@ export function saveToken(dataDir: string, token: StoredToken): void {
   chmodSync(path, 0o600);
 }
 
-/** 设备码是短命的，存内存就够——它只在「开始授权」到「检查授权」之间有用。 */
-let pendingDevice: PendingDevice | null = null;
-
-export function rememberPendingDevice(device: PendingDevice): void {
-  pendingDevice = device;
+/**
+ * 设备码要落盘，**不能只存内存**。
+ *
+ * 「开始授权」与「检查授权」是两个独立的 `action`，插件启用之前它们各自跑在一个
+ * 用完就回收的临时进程里（宿主契约 §7.3.1）。存模块级变量的话，「开始授权」返回
+ * 的瞬间进程就没了，「检查授权」永远只会说「请先点开始授权」，用户根本走不完授权。
+ */
+export function pendingDevicePath(dataDir: string): string {
+  return join(dataDir, "pending-device.json");
 }
 
-export function takePendingDevice(): PendingDevice | null {
-  return pendingDevice;
+export function rememberPendingDevice(
+  dataDir: string,
+  device: PendingDevice,
+): void {
+  const path = pendingDevicePath(dataDir);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(device, null, 2)}\n`, { mode: 0o600 });
+  // writeFileSync 的 mode 只在新建文件时生效，已存在的文件要显式改
+  chmodSync(path, 0o600);
+}
+
+/** 读出待授权的设备码。已过期的直接清掉——拿它去轮询只会拿到 expired。 */
+export function takePendingDevice(dataDir: string): PendingDevice | null {
+  let parsed: PendingDevice;
+  try {
+    parsed = JSON.parse(
+      readFileSync(pendingDevicePath(dataDir), "utf8"),
+    ) as PendingDevice;
+  } catch {
+    return null;
+  }
+  if (!parsed.deviceCode) return null;
+  if (Date.now() >= parsed.expiresAt) {
+    forgetPendingDevice(dataDir);
+    return null;
+  }
+  return parsed;
+}
+
+/** 授权拿到 token 之后要清掉：设备码是一次性的，留着只会误导下一次判断。 */
+export function forgetPendingDevice(dataDir: string): void {
+  try {
+    rmSync(pendingDevicePath(dataDir));
+  } catch {
+    // 本来就不存在，无事可做
+  }
 }
 
 /**

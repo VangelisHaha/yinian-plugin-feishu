@@ -9,6 +9,9 @@
  * 2. 「检查授权」action → 轮询几秒给即时反馈（**只有 15 秒超时**，不能久等）；
  * 3. `config.validate` 里再兜一次（30 秒）——用户在浏览器点完同意后直接点「启用」
  *    也要能成功，不该强迫他先点一次「检查授权」。
+ *
+ * 三段之间**没有共享内存**：启用之前每个 action 都跑在一个用完就回收的临时进程里，
+ * 所以设备码只能靠 `dataDir` 传递，见 `feishu/auth.mts` 的 `rememberPendingDevice`。
  */
 
 import { context, logger } from "../sdk/index.mjs";
@@ -21,6 +24,7 @@ import type {
 import {
   AuthError,
   fetchUserName,
+  forgetPendingDevice,
   loadToken,
   pollDeviceToken,
   rememberPendingDevice,
@@ -29,7 +33,7 @@ import {
   takePendingDevice,
   type StoredToken,
 } from "../feishu/auth.mjs";
-import { credentialsFrom } from "./sync.mjs";
+import { credentialsFrom } from "../feishu/pluginConfig.mjs";
 
 /** 「检查授权」能等多久。action 的超时是 15 秒，留 3 秒余量。 */
 const CHECK_BUDGET_MS = 12_000;
@@ -60,7 +64,8 @@ export async function startAuthorization(params: {
 
   try {
     const device = await requestDeviceCode(credentials);
-    rememberPendingDevice(device);
+    // 落盘而不是存内存：下一次「检查授权」是另一个临时进程
+    rememberPendingDevice(context().dataDir, device);
     logger.info("已申请设备码，等待用户在浏览器里授权", {
       code: "FEISHU_DEVICE_CODE",
     });
@@ -93,7 +98,7 @@ export async function checkAuthorization(params: {
     return { message: authorizedMessage(existing) };
   }
 
-  const pending = takePendingDevice();
+  const pending = takePendingDevice(dataDir);
   if (!pending) {
     return { message: "请先点「开始授权」" };
   }
@@ -132,7 +137,7 @@ export async function validate(
   }
 
   // 用户可能刚在浏览器点完同意就直接点了启用，这里替他把最后一步走完
-  const pending = takePendingDevice();
+  const pending = takePendingDevice(dataDir);
   if (!pending) {
     return {
       ok: false,
@@ -177,6 +182,8 @@ async function finishAuthorization(
   const userName = await fetchUserName(credentials, token.accessToken);
   if (userName) token.userName = userName;
   saveToken(dataDir, token);
+  // 设备码是一次性的，用掉就清，别让下一次判断以为还有待授权的流程
+  forgetPendingDevice(dataDir);
   logger.info(`授权成功${userName ? `：${userName}` : ""}`, {
     code: "FEISHU_AUTHORIZED",
   });

@@ -9,7 +9,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { start } from "./sdk/index.mjs";
+import * as calendars from "./handlers/calendars.mjs";
 import * as config from "./handlers/config.mjs";
+import * as notify from "./handlers/notify.mjs";
 import * as sync from "./handlers/sync.mjs";
 
 /** 版本只维护在 manifest 一处。 */
@@ -25,13 +27,18 @@ start({
   version: readManifestVersion(),
 
   handlers: {
+    // sync.pull 按 request.resource 分派：task 走飞书任务，event 走飞书日历
     "sync.pull": sync.pull,
     "sync.push": sync.push,
+    "notify.send": notify.send,
     "config.validate": config.validate,
 
     // 授权三段式，见 handlers/config.mts 的说明
     "feishu.startAuthorization": config.startAuthorization,
     "feishu.checkAuthorization": config.checkAuthorization,
     "feishu.authorizationStatus": config.authorizationStatus,
+
+    "feishu.listCalendars": calendars.listCalendars,
+    "feishu.testNotification": notify.testNotification,
   },
 });

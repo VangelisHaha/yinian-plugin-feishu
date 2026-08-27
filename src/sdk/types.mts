@@ -62,10 +62,86 @@ export interface ExternalItem {
   recurrenceRule?: string;
   parentExternalId?: string;
   tags?: string[];
+  /**
+   * 外部系统已经排好的排期段。
+   *
+   * `dueAt` 回答「最晚什么时候完成」，这个回答「打算什么时候做」——一念把两件事
+   * 分开建模，日历上前者是 Deadline 细标记，后者才在时间轴上占一段。**只给 dueAt
+   * 的任务在日历上永远只有一个标记。**
+   *
+   * 只有 manifest 的 `capabilities.fields` 里声明了 `schedule` 才生效。
+   *
+   * **缺省与空数组语义不同**：不传表示「这次不带排期信息」，宿主不动任何块；
+   * 传 `[]` 表示「外部明确没有排期了」，宿主会清掉它建过的块。
+   */
+  schedule?: ExternalScheduleSlot[];
   /** 外部最后更新时间，RFC3339。 */
   remoteUpdatedAt?: string;
   /** 外部原始 JSON 全量。宿主会原样存下来，界面可以不展示。 */
   remoteData?: unknown;
+  /**
+   * 想让用户在任务详情「来源」区看到的额外字段。
+   *
+   * 一念的主模型只有所有待办系统都有的字段。你系统里独有的东西（空间、工作项类型、
+   * 当前节点、负责人…）走这里：**你自己整理成「标签 + 值」，宿主原样展示**，
+   * 核心不认识任何具体外部系统。
+   *
+   * **缺省与空数组语义不同**：不传表示「这次不带展示字段」，宿主保持上次的值；
+   * 传 `[]` 表示「明确没有了」，宿主会清空。
+   */
+  details?: ExternalDetailField[];
+}
+
+/**
+ * 一条展示字段。
+ *
+ * 宿主的硬限制（超出直接丢弃，不报错）：最多 20 条，`label` ≤ 32 字符，
+ * `value` ≤ 512 字符，`label` 或 `value` 为空白的条目会被丢掉。
+ */
+export interface ExternalDetailField {
+  /** 字段名，直接展示给用户。用人话，别用 API 字段名。 */
+  label: string;
+  /**
+   * 已经格式化好的值。
+   *
+   * 时间戳、枚举 id、嵌套对象请**自己转成人能读的文本**——宿主不认识你的数据结构，
+   * 传 `1755000000000` 用户就只能看到 `1755000000000`。
+   */
+  value: string;
+  /**
+   * 缺省 `text`。
+   *
+   * `link` 的 `value` 必须是 `http` / `https`，否则宿主会降级成纯文本展示。
+   * 刻意只有这两种：内容来自第三方仓库，能渲染 HTML / Markdown 就等于交出 XSS 面。
+   */
+  kind?: "text" | "link";
+}
+
+/** 排期段状态，取值与一念的排期块一致。 */
+export type ScheduleSlotStatus =
+  | "planned"
+  | "active"
+  | "finished"
+  | "unfinished"
+  | "canceled";
+
+/** 外部系统里的一段排期，落成一念 Task 的一个排期块。 */
+export interface ExternalScheduleSlot {
+  /**
+   * 这一段在外部系统里的**稳定**标识，同一条 `ExternalItem` 内唯一。
+   *
+   * 宿主全靠它区分「同一段被改了时间」和「删一段又加一段」。给不稳定的值
+   * （比如带上了开始时间）会让每轮同步都删旧块建新块，块上记的实际起止时间
+   * 跟着丢，还会刷一堆出站事件。
+   */
+  externalRef: string;
+  /** RFC3339。 */
+  plannedStart: string;
+  /** RFC3339，必须晚于 `plannedStart`。 */
+  plannedEnd: string;
+  status?: ScheduleSlotStatus;
+  /** 段名（如「中台开发」）。一念的排期块不存名字，这里只进日志与诊断。 */
+  title?: string;
 }
 
 export interface PullRequest {
@@ -77,19 +153,140 @@ export interface PullRequest {
   since?: string;
   /** 忽略游标做全量拉取。 */
   full: boolean;
+  /**
+   * 这个 Integration 的完整配置（插件级 + 实例级，宿主已合并，secret 已解密）。
+   *
+   * **用它，不要用 `context().config`**：一个插件进程服务该插件下的所有实例，
+   * `plugin.init` 里那份配置代表不了具体某个实例。
+   */
+  config?: Record<string, unknown>;
 }
 
 export interface PullResult {
   items: ExternalItem[];
+  /**
+   * 外部日历容器（`resource: "event"` 用）。
+   *
+   * 不给也能用：宿主会建一个以 Integration 名命名的兜底日历，
+   * 没有 `calendarExternalId` 的事件全部落在那里。只有一个日历的源（新股、节假日）
+   * 不需要操心这一段。
+   */
+  calendars?: ExternalCalendar[];
+  /** 外部事件（`resource: "event"` 用）。 */
+  events?: ExternalEvent[];
+  /**
+   * `true` 表示本次 pull 的 `events` 就是这些日历的**完整集合**，
+   * 宿主会把没出现的事件标成远端删除并置 `canceled`。
+   *
+   * 解决的问题：外部日历常常没有删除通知（新股上市后就从页面上消失了），
+   * 逐条 diff 又要求插件自己记账。
+   *
+   * **三条约束**：只在最后一页生效（分页时以最后一轮为准）；
+   * 增量源（只拉最近改动）**不要开**，否则每轮都会把历史事件全判成删除；
+   * 与 `deletedExternalIds` 可以同时用，取并集。
+   */
+  eventsComplete?: boolean;
   cursor?: string;
   hasMore: boolean;
   /**
    * 外部已删除的 id。
    *
-   * 宿主**不会**删本地任务，只把关联标成 `remote_deleted` 等人处理——
+   * task：宿主**不会**删本地任务，只把关联标成 `remote_deleted` 等人处理——
    * 外部删除不该静默带走本地数据。
+   * event：关联标 `remote_deleted` 且事件置 `canceled`（不软删，
+   * 「这个会取消了」本身是用户要看到的信息）。
    */
   deletedExternalIds?: string[];
+}
+
+// ── Event 资源（pull-only，远端权威） ────────────────────────────────────
+//
+// 见一念仓库 docs/11-plugin-architecture.md §5.1.1。
+//
+// **宿主不会对 event 调 `sync.push`。** 外部日历一律落成只读日历，一念这侧改不了，
+// 也就没有冲突判定与待确认导入。理由：外部日历里的事情是外部已经发生的事实
+// （几号上市、会议改到几点），两边各改一半再 merge，结果和两边都不一致。
+
+/** 外部事件状态。**与 task 的四态不同**：Event 没有「完成」，只会取消。 */
+export type ExternalEventStatus = "active" | "canceled";
+
+export type ExternalBusyStatus = "busy" | "tentative" | "free";
+
+export type ExternalResponseStatus =
+  | "needs_action"
+  | "accepted"
+  | "declined"
+  | "tentative";
+
+/**
+ * 外部系统里的一个日历容器。
+ *
+ * 宿主按 `(integrationId, externalId)` upsert 成一念的日历行，用户可以在日历侧栏
+ * 按来源逐个隐藏——**隐藏选择不会被同步覆盖**，远端改名只改名字。
+ *
+ * 刻意只有两个字段：pull-only 下让插件声明「这个日历可写」是空头承诺，
+ * 宿主没有 event 的回写通道。外部日历恒为只读。
+ */
+export interface ExternalCalendar {
+  /** 外部日历主键，同一 Integration 内唯一。 */
+  externalId: string;
+  /** 显示名，≤ 64 字符，超出截断。空白会被跳过（侧栏上是一行空白，认不出）。 */
+  name: string;
+}
+
+/**
+ * 外部日历里的一个事件。
+ *
+ * 时间形态**二选一**，混用的条目宿主会跳过并计入 `invalid`（其余条目照常落库）：
+ *
+ * - 定时：`allDay` 不传或 false，必须给 `startAt` / `endAt`
+ * - 全天：`allDay: true`，必须给 `startDate` / `endDate`，**右开区间**
+ */
+export interface ExternalEvent {
+  /**
+   * 外部主键，同一 Integration 内唯一且稳定。
+   *
+   * **一条外部记录可以产多个事件**：一只新股有认购截止、暗盘、上市三个时点，
+   * 这时自己拼稳定后缀（`02261:listing`）。不要用序号——顺序一变就全错位。
+   */
+  externalId: string;
+  /** 归属的 `ExternalCalendar.externalId`。不给就落在兜底日历。 */
+  calendarExternalId?: string;
+  /** 给了它，事件详情就有「在你的插件里打开」按钮。 */
+  externalUrl?: string;
+  title: string;
+  notes?: string;
+  /** 缺省 `active`。 */
+  status?: ExternalEventStatus;
+  /** 缺省 false。 */
+  allDay?: boolean;
+  /** RFC3339，非全天必填。 */
+  startAt?: string;
+  /** RFC3339，非全天必填，必须晚于 `startAt`。 */
+  endAt?: string;
+  /** `YYYY-MM-DD`，全天必填。 */
+  startDate?: string;
+  /** `YYYY-MM-DD`，全天必填，**右开**：只占 8/20 要写 `2026-08-21`。 */
+  endDate?: string;
+  location?: string;
+  /**
+   * 缺省 `busy`。
+   *
+   * 信息类事件（新股上市、节假日、财报日）**建议给 `free`**，
+   * 否则会把用户一整天标成忙，忙闲视图就没意义了。
+   */
+  busyStatus?: ExternalBusyStatus;
+  /** 缺省 `accepted`。 */
+  responseStatus?: ExternalResponseStatus;
+  /** 缺省 **false**，与本地新建 Event 相反——同步来的事件不是你组织的。 */
+  isOrganizer?: boolean;
+  recurrenceRule?: string;
+  /** RFC3339。有它宿主就能跳过没变化的事件，省一次写库。 */
+  remoteUpdatedAt?: string;
+  /** 外部原始 JSON 全量，宿主原样存下来。 */
+  remoteData?: unknown;
+  /** 事件详情「来源」区的展示字段，与 task 同一结构、同一限制。 */
+  details?: ExternalDetailField[];
 }
 
 export interface PushRequest {
@@ -102,6 +299,8 @@ export interface PushRequest {
   item: ExternalItem;
   /** 本次变更涉及的字段，供你做最小化更新。状态类动作为空数组。 */
   changedFields?: SyncField[];
+  /** 这个 Integration 的完整配置，语义同 `PullRequest.config`。 */
+  config?: Record<string, unknown>;
 }
 
 export interface PushResult {

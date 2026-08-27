@@ -20,6 +20,7 @@
    |---|---|
    | 任务同步 | `task:task:read`、`task:task:write` |
    | 日历与会议同步 | `calendar:calendar:read`、`calendar:calendar.event:read` |
+   | 临时视频会议同步 | `vc:meeting.search:read`、`vc:meeting:readonly`、`vc:meeting.meetingevent:read` |
    | 通知发到自己的单聊（可选） | `im:message.send_as_user` |
    | 拿 refresh_token | `offline_access` |
 
@@ -72,6 +73,12 @@ npm run pack:zip   # 产出 release/yinian-feishu-v<版本>.zip
 | 删除 | 上一轮在窗口内见过、这一轮没见到 → 报删除。**只报仍落在窗口内的**，否则每轮都会把刚滑出窗口的日程误报成删除 |
 | `eventsComplete` | **一直是 `false`**。我们拉的是滚动窗口不是完整集合，开了它会让上周的会集体变成「已取消」 |
 
+### 临时视频会议
+
+打开实例设置里的「同步临时视频会议」后，插件每 60 秒检测一次本机飞书入会进程，并直接调用 VC API 补齐会议信息，不依赖 `lark-cli`。进行中的会议使用 120 秒短租约，每轮续期；离会后优先采用飞书真实结束时间。临时会议放入独立日历「临时会议」，与排期日历按 meetingId、会议链接/会议号、标题与时间重叠三层去重，排期日历优先。
+
+普通任务内部最短 120 秒拉一次，完整日历最短 300 秒拉一次；手动完整刷新会跳过节流。VC 查询失败只让 VC 状态降级，会保留上次成功数据，也不会阻断或误删普通日历。
+
 想让任务与日历各用一个同步间隔，就建两个实例，一个关掉「同步飞书任务」、另一个关掉「同步飞书日历与会议」。
 
 ### 通知（出站）
@@ -120,6 +127,7 @@ npm run pack:zip   # 产出 release/yinian-feishu-v<版本>.zip
 | 任务差一天 | 全天任务按本机时区解释日期，检查系统时区 |
 | 日历一条都没同步 | 权限里漏了 `calendar:calendar:read` / `calendar:calendar.event:read`，或补权限后没重新授权 |
 | 日程超出窗口没同步 | 实例设置里调「日历往前/往后同步几天」。窗口外的既不同步，也不会被误判成删除 |
+| 临时会议没同步 | 确认实例已打开「同步临时视频会议」，飞书应用已开通三个 `vc:*` scope，并重新走过一次授权 |
 | 通知没收到 | 先在插件设置里点「发送测试通知」定位是配置问题还是订阅问题；再确认一念的通知总开关与「飞书」渠道开关都开着 |
 | 「Webhook 地址不是飞书自定义机器人的地址」 | 粘成了群分享链接。要的是群设置 → 群机器人 → 自定义机器人里那条 `https://open.feishu.cn/open-apis/bot/v2/hook/...` |
 
@@ -128,7 +136,7 @@ npm run pack:zip   # 产出 release/yinian-feishu-v<版本>.zip
 ```bash
 npm run typecheck
 npm run doctor      # 契约自检：manifest、设置面板、权限声明与实际调用
-npm test            # 105 个测试，不发真实请求
+npm test            # 测试不发真实请求
 ```
 
 测试用替换 `globalThis.fetch` 的方式驱动，覆盖时间映射（任务用**毫秒**、日历用**秒**）、全天日程的右开区间、删除记账的窗口判定、Device Flow 的各个轮询分支、token 刷新、API 错误分类与通知幂等。**真机验收仍然必要**——单测替代不了「凭据真的能换出 token」。

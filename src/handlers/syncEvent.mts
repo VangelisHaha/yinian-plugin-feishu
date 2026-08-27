@@ -35,6 +35,8 @@ import {
 } from "../feishu/calendar.mjs";
 import { parseDate, parseSeconds, toExternalEvent } from "../feishu/calendarMapping.mjs";
 import { configOf, credentialsFrom } from "../feishu/pluginConfig.mjs";
+import { FeishuVcClient } from "../feishu/vc.mjs";
+import { syncVcMeetings, VC_CALENDAR_ID } from "./vcSync.mjs";
 
 /** 默认往前拉几天。太长没意义（历史会议看不了几眼），太短会漏掉本周一。 */
 const DEFAULT_PAST_DAYS = 7;
@@ -47,6 +49,9 @@ const MAX_FUTURE_DAYS = 365;
 const MAX_CALENDARS = 10;
 
 const DAY_MS = 86_400_000;
+const CALENDAR_THROTTLE_MS = 300_000;
+const lastCalendarPull = new Map<string, number>();
+const calendarEventCache = new Map<string, ExternalEvent[]>();
 
 function intFrom(value: unknown, fallback: number, min: number, max: number): number {
   const parsed =
@@ -144,14 +149,15 @@ function saveSeen(dataDir: string, integrationId: string, ids: string[]): void {
   }
 }
 
-/** `resource: "event"` 的 pull。 */
+/** `resource: "event"` 的 pull。普通日历 5 分钟一次，VC 每轮（默认 60 秒）检查。 */
 export async function pull(request: PullRequest): Promise<PullResult> {
   const ctx = context();
   const config = configOf(request);
+  const integrationId = request.integrationId || ctx.integrationId || "default";
+  const syncCalendars = config["syncCalendars"] !== false;
+  const syncVc = config["syncVcMeetings"] === true;
 
-  // 关掉日历同步时什么都不动：eventsComplete 保持 false、不报删除，
-  // 已经同步过的日程原样留在一念里（重新打开后继续跟远端对齐）
-  if (config["syncCalendars"] === false) {
+  if (!syncCalendars && !syncVc) {
     return {
       items: [],
       events: [],
@@ -160,6 +166,57 @@ export async function pull(request: PullRequest): Promise<PullResult> {
       deletedExternalIds: [],
     };
   }
+
+  const lastPull = lastCalendarPull.get(integrationId) ?? 0;
+  const calendarDue = request.full || Date.now() - lastPull >= CALENDAR_THROTTLE_MS;
+  let regular: PullResult = {
+    items: [],
+    calendars: [],
+    events: [],
+    eventsComplete: false,
+    hasMore: false,
+    deletedExternalIds: [],
+  };
+  if (syncCalendars && calendarDue) {
+    regular = await pullCalendars(request);
+    lastCalendarPull.set(integrationId, Date.now());
+    calendarEventCache.set(integrationId, regular.events ?? []);
+  }
+
+  if (!syncVc) return regular;
+
+  const vc = await syncVcMeetings({
+    client: new FeishuVcClient(credentialsFrom(config), ctx.dataDir),
+    dataDir: ctx.dataDir,
+    integrationId,
+    traceId: request.traceId,
+    regularEvents: calendarEventCache.get(integrationId) ?? regular.events ?? [],
+  });
+  setState({
+    ...(request.integrationId ? { integrationId: request.integrationId } : {}),
+    state: {
+      lastVcPullAt: new Date().toISOString(),
+      vcEventCount: vc.events.length,
+      vcDegraded: vc.degraded,
+    },
+  });
+  return {
+    ...regular,
+    calendars: [
+      ...(regular.calendars ?? []),
+      { externalId: VC_CALENDAR_ID, name: "临时会议" },
+    ],
+    events: [...(regular.events ?? []), ...vc.events],
+    deletedExternalIds: [
+      ...(regular.deletedExternalIds ?? []),
+      ...vc.deletedExternalIds,
+    ],
+  };
+}
+
+async function pullCalendars(request: PullRequest): Promise<PullResult> {
+  const ctx = context();
+  const config = configOf(request);
 
   const api = new FeishuCalendarClient(credentialsFrom(config), ctx.dataDir);
 

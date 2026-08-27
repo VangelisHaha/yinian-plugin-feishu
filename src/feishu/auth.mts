@@ -45,7 +45,16 @@ export type Brand = keyof typeof ENDPOINTS;
  *
  * `offline_access` 是拿 `refresh_token` 的前提，缺了它每 2 小时就要重新授权一次。
  */
-export const SCOPES = "task:task:read task:task:write offline_access";
+export const SCOPES = [
+  "task:task:read",
+  "task:task:write",
+  "calendar:calendar:read",
+  "calendar:calendar.event:read",
+  "vc:meeting.search:read",
+  "vc:meeting:readonly",
+  "vc:meeting.meetingevent:read",
+  "offline_access",
+].join(" ");
 
 const DEVICE_AUTH_PATH = "/oauth/v1/device_authorization";
 const TOKEN_PATH = "/open-apis/authen/v2/oauth/token";

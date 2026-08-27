@@ -38,6 +38,8 @@ const DETAIL_CONCURRENCY = 4;
 const DETAIL_MAX_PER_ROUND = 80;
 /** 一次 pull 最多翻多少页列表。50 条一页，40 页 = 2000 条，够个人用量。 */
 const MAX_PAGES = 40;
+const TASK_THROTTLE_MS = 120_000;
+const lastTaskPull = new Map<string, number>();
 
 function client(config: Record<string, unknown>): FeishuClient {
   return new FeishuClient(credentialsFrom(config), context().dataDir);
@@ -79,6 +81,11 @@ export async function pull(request: PullRequest): Promise<PullResult> {
   if (config["syncTasks"] === false) {
     return { items: [], hasMore: false, deletedExternalIds: [] };
   }
+  const integrationId = request.integrationId || context().integrationId || "default";
+  const lastPull = lastTaskPull.get(integrationId) ?? 0;
+  if (!request.full && Date.now() - lastPull < TASK_THROTTLE_MS) {
+    return { items: [], hasMore: false, deletedExternalIds: [] };
+  }
 
   const api = client(config);
   const syncCompleted = config["syncCompleted"] !== false;
@@ -93,6 +100,7 @@ export async function pull(request: PullRequest): Promise<PullResult> {
   const filled = detailBackfill
     ? await backfillDetails(api, items, request.traceId)
     : items;
+  lastTaskPull.set(integrationId, Date.now());
 
   // 记一下补到哪了，界面上能看出首次同步还没补完
   const remaining = detailBackfill ? filled.filter(needsDetail).length : 0;

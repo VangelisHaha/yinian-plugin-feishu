@@ -132,6 +132,14 @@ export const TIMEOUTS: Readonly<Record<string, number>> = Object.freeze({
   "sync.push": 120_000,
   "hook.dispatch": 30_000,
   "notify.send": 30_000,
+  /**
+   * 远小于其他调用，因为它**在 UI 路径上**——用户翻一页月视图就等着它。
+   *
+   * 所以别在这个调用里发网络请求：刷新放到自己的后台节奏里，`list` 只读本地缓存。
+   * 它失败也不重试、不计入断路器（契约 §4.5）：标记是装饰性显示，
+   * 重试只会让翻月卡住。
+   */
+  "dayMarks.list": 8_000,
   "plugin.shutdown": 5_000,
   /** 自定义方法（含 action 与 optionsFrom）。 */
   custom: 15_000,

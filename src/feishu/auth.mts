@@ -41,20 +41,12 @@ const ENDPOINTS = {
 export type Brand = keyof typeof ENDPOINTS;
 
 /**
- * 需要的权限。
+ * 需要的权限**按用户勾选的能力拼**，见 `capability.mts`。
  *
- * `offline_access` 是拿 `refresh_token` 的前提，缺了它每 2 小时就要重新授权一次。
+ * 原来这里是一个硬编码的全集常量：只想用通知的人也得把任务读写一并交出去。
+ * 现在改成按需申请——一项能力都没勾时根本不需要走 device flow。
  */
-export const SCOPES = [
-  "task:task:read",
-  "task:task:write",
-  "calendar:calendar:read",
-  "calendar:calendar.event:read",
-  "vc:meeting.search:read",
-  "vc:meeting:readonly",
-  "vc:meeting.meetingevent:read",
-  "offline_access",
-].join(" ");
+export { scopesFor } from "./capability.mjs";
 
 const DEVICE_AUTH_PATH = "/oauth/v1/device_authorization";
 const TOKEN_PATH = "/open-apis/authen/v2/oauth/token";
@@ -152,10 +144,23 @@ function asNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-/** 第一步：申请设备码。 */
+/**
+ * 第一步：申请设备码。
+ *
+ * `scopes` 由调用方按用户勾选的能力拼好（`capability.mts` 的 `scopesFor`）。
+ * **空串意味着没有任何能力要授权**，这时压根不该走到这里——上层要先拦住并告诉用户
+ * 「先勾一项能力」，否则飞书会返回一个没有任何权限的 token，而同步照样不动。
+ */
 export async function requestDeviceCode(
   credentials: Credentials,
+  scopes: string,
 ): Promise<PendingDevice> {
+  if (!scopes.trim()) {
+    throw new AuthError(
+      "还没有勾选任何要授权的能力，请先在插件设置里勾选（通知不需要授权）",
+      "config",
+    );
+  }
   const { accounts } = endpoints(credentials.brand);
   const basic = Buffer.from(
     `${credentials.appId}:${credentials.appSecret}`,
@@ -164,7 +169,7 @@ export async function requestDeviceCode(
 
   const data = await postForm(
     `${accounts}${DEVICE_AUTH_PATH}`,
-    { client_id: credentials.appId, scope: SCOPES },
+    { client_id: credentials.appId, scope: scopes },
     { Authorization: `Basic ${basic}` },
   );
 

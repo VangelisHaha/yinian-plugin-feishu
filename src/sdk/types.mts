@@ -380,6 +380,42 @@ export interface NotificationAction {
   label: string;
 }
 
+/** 明细里的一行。`value` 是宿主**已经格式化好的**字符串，直接印。 */
+export interface NotificationField {
+  label: string;
+  value: string;
+}
+
+/**
+ * 给富消息渠道的明细（契约 §8.2）。
+ *
+ * `title` / `body` 是为系统通知栏那两行字准备的；飞书卡片、企微图文有更大的版面，
+ * 只印这两行等于浪费掉。
+ *
+ * **`fields` 的值不要再解析。** 时区转换、全天右开区间、跨天段、只到日期的截止，
+ * 宿主已经按本机时区处理好了；渠道自己算一遍必然会写歪，而写歪的表现是用户收到
+ * 一个错的时间且毫无提示。要做视觉强调用 `priority` 与 `overdue`。
+ *
+ * `kind: "custom"`（比如设置页的测试通知）没有宿主实体，**不会带 detail**。
+ */
+export interface NotificationDetail {
+  /** 事项本体标题，不含段名。`Notification.title` 是 `subject · label` 的合成结果。 */
+  subject: string;
+  /** 排期块的段名（「中台开发」），其余类型没有。 */
+  label?: string;
+  /** 只有 Task 与排期块有。事件是 `undefined`，不是 `"none"`。 */
+  priority?: "none" | "low" | "medium" | "high";
+  /** 锚点是否已经过去。 */
+  overdue?: boolean;
+  /**
+   * `yinian://open/{task|event}/{id}`，唤起一念并打开该事项。
+   *
+   * **由宿主生成，不要自己拼 scheme。** 排期块给的是所属任务的链接（§8.2.1）。
+   */
+  deepLink?: string;
+  fields?: NotificationField[];
+}
+
 export interface Notification {
   id: string;
   kind: NotificationKind;
@@ -388,6 +424,8 @@ export interface Notification {
   entity?: EntityRef;
   /** 只有 manifest 里声明了 `supportsActions` 的渠道才会收到。 */
   actions?: NotificationAction[];
+  /** 富消息渠道用的明细。系统通知栏那种渠道可以完全忽略它。 */
+  detail?: NotificationDetail;
 }
 
 export interface NotifyRequest {
@@ -398,6 +436,99 @@ export interface NotifyRequest {
 export interface NotifyResult {
   delivered: boolean;
   detail?: string;
+}
+
+// ── 日期标记 ─────────────────────────────────────────────────────────────
+//
+// 见一念仓库 docs/11-plugin-architecture.md §8.3。
+//
+// 日期标记是挂在**某一天**上的公开日历知识：农历日序、二十四节气、传统与公历节日、
+// 法定假日与调休上班。它不属于任何用户，**不进宿主数据库、永不参与同步**——
+// 给定日期就能算出来或查出来。
+
+/**
+ * 标记类型。**这就是界面上的开关粒度**，用户可以只要休 / 班而不要圣诞节。
+ *
+ * `festival` 与 `holiday` 刻意分开：春节是**一天**、春节假期是**七天**，
+ * 混成一类就没法只显示放假安排而不显示节日名。
+ */
+export type DayMarkKind = "lunar" | "solar_term" | "festival" | "holiday";
+
+/** 这天是休还是班。**`kind: "holiday"` 必须给。** */
+export type DayRest = "off" | "work";
+
+/** 一条日期标记。 */
+export interface DayMark {
+  /**
+   * 本地日期键，**严格** `YYYY-MM-DD`。
+   *
+   * `2026-8-1` 会被宿主拒（`PLUGIN_CONTRACT_VIOLATION`）：它当 Map key 时和
+   * `2026-08-01` 对不上，界面表现为「有几天没有农历」而且不报错。
+   */
+  date: string;
+  kind: DayMarkKind;
+  /**
+   * 紧凑标签，月视图格子里显示的就是它，**2–3 字**。
+   *
+   * 更长的会被省略号截掉——那一格宽度只有 100 出头像素，还要和日期数字、
+   * 休班角标、负载数字挤在同一行。
+   */
+  label: string;
+  /** 长文案，给 Agenda 与日期详情。与 `label` 相同时不必给。 */
+  detail?: string;
+  /**
+   * `off` 放假 / `work` 调休上班。
+   *
+   * **周末也可能是上班日**，这正是它必须被显示出来的原因。
+   */
+  rest?: DayRest;
+}
+
+/**
+ * provider 声明。与 manifest 的 `contributes.dayMarks.providers` 同形。
+ *
+ * 在 `dayMarks.list` 的结果里回传它，可以**动态更新覆盖范围**——比如联网拉到了
+ * 次年的放假安排，`coversUntil` 就该往后延。省略时宿主沿用 manifest 的声明。
+ */
+export interface DayMarkProviderSpec {
+  id: string;
+  /** 展示名。**宿主不翻译它**——「日本の祝日」该按原样显示。 */
+  name: string;
+  kinds: DayMarkKind[];
+  /** ISO 3166-1 alpha-2。跨地区的（农历）留空。 */
+  region?: string;
+  /**
+   * 数据覆盖到哪天（`YYYY-MM-DD`）。
+   *
+   * **留空表示「算得出来」**（农历、节气按天文算法算，任意年份都有）；
+   * 有值表示「数据只到那天」（法定假日是按年公布的），超出的日子宿主会提示
+   * 「安排尚未公布」。
+   *
+   * 把「查不到」当成「那天不放假」是这个扩展点最容易犯的错：用户会照着一张错的
+   * 日历排期，而界面上没有任何异常。
+   */
+  coversUntil?: string;
+}
+
+export interface DayMarksListRequest {
+  /** 要问哪个 provider，对应 manifest 里声明的 `id`。 */
+  providerId: string;
+  /** 闭区间起点，`YYYY-MM-DD`。 */
+  from: string;
+  /** 闭区间终点，`YYYY-MM-DD`。**闭区间**：月视图要的就是那 42 个格子。 */
+  to: string;
+}
+
+export interface DayMarksListResult {
+  /**
+   * 区间内的全部标记。**允许为空**——「这段时间没有节日」不是错误。
+   *
+   * 同一天可以给多条（清明既是节气又是节日又是假期），宿主负责排序与择一显示，
+   * 你不需要操心优先级。
+   */
+  marks: DayMark[];
+  /** 可选，用来动态更新覆盖范围。 */
+  providers?: DayMarkProviderSpec[];
 }
 
 // ── 设置面板 ─────────────────────────────────────────────────────────────

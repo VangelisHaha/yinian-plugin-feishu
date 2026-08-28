@@ -21,9 +21,15 @@ import {
   loadNotified,
   rememberNotified,
   renderText,
+  sendViaBotDm,
   sendViaWebhook,
 } from "../dist/feishu/notify.mjs";
-import { isWebhookUrl, webhookUrlFrom } from "../dist/handlers/notify.mjs";
+import { forgetTenantToken } from "../dist/feishu/tenant.mjs";
+import {
+  configuredOpenId,
+  isWebhookUrl,
+  webhookUrlFrom,
+} from "../dist/handlers/notify.mjs";
 
 const HOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/abc-123";
 const originalFetch = globalThis.fetch;
@@ -44,6 +50,23 @@ function mockFetch(response) {
   return calls;
 }
 
+/** 应用身份要先换 tenant token，再发消息，所以是两次请求。 */
+function mockTenantThen(response) {
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), body: JSON.parse(init.body) });
+    if (String(url).includes("tenant_access_token")) {
+      return jsonResponse({
+        code: 0,
+        tenant_access_token: "t-abc",
+        expire: 7200,
+      });
+    }
+    return response;
+  };
+  return calls;
+}
+
 function jsonResponse(body, status = 200) {
   return {
     ok: status >= 200 && status < 300,
@@ -54,6 +77,8 @@ function jsonResponse(body, status = 200) {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  // token 缓存在进程内，不清掉会让下一个用例拿到上一个用例的 mock token
+  forgetTenantToken();
   while (dirs.length > 0) rmSync(dirs.pop(), { recursive: true, force: true });
 });
 
@@ -61,7 +86,11 @@ describe("投递方式", () => {
   it("缺省走 Webhook", () => {
     assert.equal(deliveryMode({}), "webhook");
     assert.equal(deliveryMode({ notifyMode: "什么" }), "webhook");
-    assert.equal(deliveryMode({ notifyMode: "selfDm" }), "selfDm");
+    assert.equal(deliveryMode({ notifyMode: "botDm" }), "botDm");
+  });
+
+  it("0.3.x 存下的 selfDm 按单聊处理：语义没变，只是身份换成了应用", () => {
+    assert.equal(deliveryMode({ notifyMode: "selfDm" }), "botDm");
   });
 
   it("只认自定义机器人的地址", () => {
@@ -78,6 +107,11 @@ describe("投递方式", () => {
   it("地址两端的空白会被吃掉", () => {
     assert.equal(webhookUrlFrom({ notifyWebhookUrl: ` ${HOOK} ` }), HOOK);
     assert.equal(webhookUrlFrom({}), "");
+  });
+
+  it("手填的接收人 open_id 也去空白", () => {
+    assert.equal(configuredOpenId({ notifyOpenId: " ou_1 " }), "ou_1");
+    assert.equal(configuredOpenId({}), "");
   });
 });
 
@@ -96,6 +130,27 @@ describe("正文", () => {
     assert.equal(
       renderText({ id: "r1@1", kind: "custom", title: "只有标题" }),
       "【一念】只有标题",
+    );
+  });
+
+  it("Webhook 发不了卡片，所以明细拼成文本行", () => {
+    const text = renderText({
+      id: "r1@1",
+      kind: "schedule_start",
+      title: "发布 · 中台开发",
+      body: "排期开始：15 分钟后",
+      detail: {
+        subject: "发布",
+        fields: [
+          { label: "排期", value: "08-28 14:00–16:00" },
+          // 空值不该占一行
+          { label: "地点", value: "  " },
+        ],
+      },
+    });
+    assert.equal(
+      text,
+      "【一念】发布 · 中台开发\n排期开始：15 分钟后\n排期：08-28 14:00–16:00",
     );
   });
 });
@@ -188,5 +243,74 @@ describe("Webhook 投递", () => {
 
     assert.equal(result.delivered, false);
     assert.match(result.detail, /ECONNREFUSED/);
+  });
+});
+
+describe("应用身份单聊", () => {
+  const CREDENTIALS = { appId: "cli_x", appSecret: "s", brand: "feishu" };
+  const NOTIFICATION = {
+    id: "rem_1@1",
+    kind: "schedule_start",
+    title: "发布中台服务 · 中台开发",
+    body: "排期开始：15 分钟后",
+    detail: {
+      subject: "发布中台服务",
+      label: "中台开发",
+      priority: "high",
+      deepLink: "yinian://open/task/t-1",
+      fields: [{ label: "排期", value: "08-28 14:00–16:00" }],
+    },
+  };
+
+  it("先换 tenant token，再以应用身份发 interactive 卡片", async () => {
+    const calls = mockTenantThen(jsonResponse({ code: 0, msg: "success" }));
+    const result = await sendViaBotDm(CREDENTIALS, "ou_1", NOTIFICATION);
+
+    assert.equal(result.delivered, true);
+    assert.equal(calls.length, 2);
+    // 第一次必须是应用身份端点，不是 user token
+    assert.match(calls[0].url, /auth\/v3\/tenant_access_token\/internal/);
+    assert.deepEqual(calls[0].body, { app_id: "cli_x", app_secret: "s" });
+
+    const send = calls[1];
+    assert.match(send.url, /receive_id_type=open_id/);
+    assert.equal(send.body.receive_id, "ou_1");
+    // 这是整个改动的要点：卡片而不是文本，应用身份而不是用户身份
+    assert.equal(send.body.msg_type, "interactive");
+    assert.ok(send.body.uuid, "缺 uuid 会让飞书侧失去去重能力");
+
+    // content 必须是 JSON 字符串，传对象飞书会报参数错误
+    assert.equal(typeof send.body.content, "string");
+    const card = JSON.parse(send.body.content);
+    assert.equal(card.schema, "2.0");
+    assert.equal(card.header.title.content, "发布中台服务");
+  });
+
+  it("token 只换一次：同一个 appId 后续复用缓存", async () => {
+    const calls = mockTenantThen(jsonResponse({ code: 0 }));
+    await sendViaBotDm(CREDENTIALS, "ou_1", NOTIFICATION);
+    await sendViaBotDm(CREDENTIALS, "ou_1", { ...NOTIFICATION, id: "rem_2@1" });
+
+    const tokenCalls = calls.filter((call) =>
+      call.url.includes("tenant_access_token"),
+    );
+    assert.equal(tokenCalls.length, 1);
+  });
+
+  it("凭据不对时说清楚是 App ID / Secret 或版本的问题", async () => {
+    globalThis.fetch = async () =>
+      jsonResponse({ code: 10003, msg: "invalid app_id" });
+    const result = await sendViaBotDm(CREDENTIALS, "ou_1", NOTIFICATION);
+
+    assert.equal(result.delivered, false);
+    assert.match(result.detail, /App ID/);
+  });
+
+  it("发送被拒时带回飞书的原因，不抛异常", async () => {
+    mockTenantThen(jsonResponse({ code: 230013, msg: "bot not in chat" }));
+    const result = await sendViaBotDm(CREDENTIALS, "ou_1", NOTIFICATION);
+
+    assert.equal(result.delivered, false);
+    assert.match(result.detail, /230013/);
   });
 });

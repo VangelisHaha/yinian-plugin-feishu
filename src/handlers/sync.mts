@@ -22,6 +22,7 @@ import type {
 } from "../sdk/index.mjs";
 import { AuthError } from "../feishu/auth.mjs";
 import { FeishuClient, type FeishuTask } from "../feishu/client.mjs";
+import { requireCapability } from "../feishu/guard.mjs";
 import { configOf, credentialsFrom } from "../feishu/pluginConfig.mjs";
 import {
   applyDetail,
@@ -81,6 +82,9 @@ export async function pull(request: PullRequest): Promise<PullResult> {
   if (config["syncTasks"] === false) {
     return { items: [], hasMore: false, deletedExternalIds: [] };
   }
+  // 上面那个开关是「用户不想同步任务」，这里是「想同步但还没授权」。
+  // 后者必须抛出来：静默返回空会让同步看起来在跑却永远拉不到东西
+  requireCapability(config, "tasks", context().dataDir);
   const integrationId = request.integrationId || context().integrationId || "default";
   const lastPull = lastTaskPull.get(integrationId) ?? 0;
   if (!request.full && Date.now() - lastPull < TASK_THROTTLE_MS) {
@@ -203,7 +207,10 @@ async function backfillDetails(
 }
 
 export async function push(request: PushRequest): Promise<PushResult> {
-  const api = client(configOf(request));
+  const config = configOf(request);
+  // 回写要写权限（task:task:write），和 pull 是同一项能力
+  requireCapability(config, "tasks", context().dataDir);
+  const api = client(config);
   const guid = request.externalId;
   if (!guid) {
     // 一期不做双向创建，宿主也不会下发 create

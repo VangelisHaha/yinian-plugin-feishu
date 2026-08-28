@@ -5,9 +5,25 @@
  *
  * - `webhook`（默认）：群自定义机器人的 Webhook。零额外权限、零 OAuth，
  *   把 URL 填进来就能收消息。
- * - `selfDm`：用已有的 device flow 用户凭据，给自己发单聊消息
- *   （`POST /open-apis/im/v1/messages`，`receive_id_type=open_id`）。
- *   需要在开放平台补 `im:message.send_as_user`，并重新授权一次。
+ * - `botDm`：**应用身份**给你发单聊卡片（`tenant_access_token` +
+ *   `POST /open-apis/im/v1/messages`，`msg_type=interactive`）。
+ *
+ * ## `botDm` 修掉了什么
+ *
+ * 上一版这个模式叫 `selfDm`，用的是 device flow 那份 `user_access_token` +
+ * `im:message.send_as_user`——于是消息**以你自己的身份发给你自己**，飞书里看起来是
+ * 自言自语，而不是应用在提醒你。现在换成应用身份：头像与名字都是那个自建应用的，
+ * 权限也从「代表用户发言」降成「机器人发消息」（`im:message:send_as_bot`）。
+ *
+ * 它还带来一个好处：**通知不再需要用户 OAuth 授权**。tenant token 只认 appId +
+ * appSecret，所以只想把提醒发到飞书的人不必把任务读写权限一并交出去
+ * （见 `capability.mts`）。
+ *
+ * ## 为什么发卡片而不是纯文本
+ *
+ * 宿主下发的 `notification.detail`（契约 §8.2）带着截止时间、优先级、标签、地点这些
+ * 明细。纯文本只能把它们拼成一坨，卡片能排成网格并给一个「在一念中打开」的按钮。
+ * 卡片的构造在 `card.mts`，这里只负责送。
  *
  * ## 为什么配置在插件级
  *
@@ -32,24 +48,40 @@ import { join } from "node:path";
 import { logger } from "../sdk/index.mjs";
 import type { Notification, NotifyResult } from "../sdk/index.mjs";
 import { type Credentials } from "./auth.mjs";
-import { apiRequest, openBase } from "./request.mjs";
+import { buildCard } from "./card.mjs";
+import { openBase } from "./request.mjs";
+import { ensureTenantToken } from "./tenant.mjs";
 
 /** 最多记多少条已投递 id。 */
 const SEEN_LIMIT = 200;
 /** 飞书 uuid 的长度上限（超了会报参数错误）。 */
 const UUID_MAX = 50;
 
-export type DeliveryMode = "webhook" | "selfDm";
+const SEND_MESSAGE_PATH = "/open-apis/im/v1/messages";
+
+export type DeliveryMode = "webhook" | "botDm";
 
 export function deliveryMode(config: Record<string, unknown>): DeliveryMode {
-  return config["notifyMode"] === "selfDm" ? "selfDm" : "webhook";
+  // 兼容 0.3.x 存下来的 `selfDm`：语义上是同一个「发单聊」，只是身份换了
+  const raw = config["notifyMode"];
+  return raw === "botDm" || raw === "selfDm" ? "botDm" : "webhook";
 }
 
-/** 通知正文。渠道不做静默/订阅判断——那是宿主的事，这里只负责好好排版。 */
+/**
+ * 纯文本正文。
+ *
+ * Webhook 走的是群机器人，**它发不了 interactive 卡片**（自定义机器人只支持
+ * text / post / image / share_chat / interactive 的简化形态，且不同版本差异大），
+ * 所以那条路仍然是文本。明细拼成缩进的几行，比只有标题好读。
+ */
 export function renderText(notification: Notification): string {
   const lines = [`【一念】${notification.title}`];
   const body = notification.body?.trim();
   if (body) lines.push(body);
+  for (const field of notification.detail?.fields ?? []) {
+    if (!field.label.trim() || !field.value.trim()) continue;
+    lines.push(`${field.label}：${field.value}`);
+  }
   return lines.join("\n");
 }
 
@@ -139,31 +171,88 @@ export async function sendViaWebhook(
   };
 }
 
-/** 给自己发单聊。需要 `im:message.send_as_user`。 */
-export async function sendViaSelfDm(
+/**
+ * 应用身份给指定用户发单聊卡片。
+ *
+ * 用 `tenant_access_token`，所以消息来自机器人而不是用户自己。需要开放平台上的
+ * `im:message:send_as_bot`，**且你本人要在这个自建应用的可用范围内**——不在范围里
+ * 时飞书会拒收，报「机器人未与用户建立会话」之类的错误。
+ */
+export async function sendViaBotDm(
   credentials: Credentials,
-  dataDir: string,
   openId: string,
   notification: Notification,
 ): Promise<NotifyResult> {
-  await apiRequest<{ message_id?: string }>({
-    credentials,
-    dataDir,
-    method: "POST",
-    path: "/open-apis/im/v1/messages",
-    query: { receive_id_type: "open_id" },
-    body: {
-      receive_id: openId,
-      msg_type: "text",
-      // content 必须是 JSON 字符串，不是对象
-      content: JSON.stringify({ text: renderText(notification) }),
-      uuid: idempotencyKey(notification.id),
-    },
-  });
-  return { delivered: true };
+  // 取 token 失败也要走返回值：这个函数的契约是「永远返回 NotifyResult」。
+  // 靠调用方 catch 能兜住，但那让「不抛异常」这条纪律依赖于调用点写对，
+  // 而抛出去的代价是被算进插件失败次数、五次烧开断路器、连同步一起停摆
+  let token: string;
+  try {
+    token = await ensureTenantToken(credentials);
+  } catch (error) {
+    return {
+      delivered: false,
+      detail: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  const url = new URL(`${openBase(credentials)}${SEND_MESSAGE_PATH}`);
+  url.searchParams.set("receive_id_type", "open_id");
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        receive_id: openId,
+        msg_type: "interactive",
+        // content 必须是 JSON **字符串**，不是对象——传对象飞书会报参数错误
+        content: JSON.stringify(buildCard(notification)),
+        uuid: idempotencyKey(notification.id),
+      }),
+    });
+  } catch (error) {
+    return {
+      delivered: false,
+      detail: `连不上飞书：${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
+  const text = await response.text();
+  let payload: { code?: number; msg?: string };
+  try {
+    payload = JSON.parse(text) as typeof payload;
+  } catch {
+    return {
+      delivered: false,
+      detail: `飞书返回非 JSON（HTTP ${response.status}）：${text.slice(0, 160)}`,
+    };
+  }
+  if (payload.code === 0) return { delivered: true };
+  return {
+    delivered: false,
+    detail: `发送失败 ${payload.code ?? response.status}：${
+      payload.msg ?? text.slice(0, 120)
+    }`,
+  };
 }
 
-/** 取当前授权用户的 open_id。`authen/v1/user_info` 不需要额外 scope。 */
+/**
+ * 取要发给谁的 open_id。
+ *
+ * 这里有个绕不开的地方：**应用身份发消息，但收件人是谁只有用户授权后才知道**。
+ * `authen/v1/user_info` 要 user token。所以两条路：
+ *
+ * 1. 用户已经为同步授权过（`token.json` 在），顺手用它查一次 open_id 并缓存；
+ * 2. 用户只想用通知、没走过任何授权，那就让他自己填 open_id。
+ *
+ * 第 2 条是「最小授权」的代价：不想授权就得自己提供收件人。填错的表现是飞书报
+ * 「用户不存在」，比静默不发好。
+ */
 export async function fetchOpenId(
   credentials: Credentials,
   accessToken: string,

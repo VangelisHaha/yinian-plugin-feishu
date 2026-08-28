@@ -34,6 +34,7 @@ import {
   type CalendarSummary,
 } from "../feishu/calendar.mjs";
 import { parseDate, parseSeconds, toExternalEvent } from "../feishu/calendarMapping.mjs";
+import { hasCapability, requireCapability } from "../feishu/guard.mjs";
 import { configOf, credentialsFrom } from "../feishu/pluginConfig.mjs";
 import { FeishuVcClient } from "../feishu/vc.mjs";
 import { syncVcMeetings, VC_CALENDAR_ID } from "./vcSync.mjs";
@@ -155,7 +156,11 @@ export async function pull(request: PullRequest): Promise<PullResult> {
   const config = configOf(request);
   const integrationId = request.integrationId || ctx.integrationId || "default";
   const syncCalendars = config["syncCalendars"] !== false;
-  const syncVc = config["syncVcMeetings"] === true;
+  // 会议是日历同步的**补充**，不是独立实例。所以它的能力检查用 hasCapability
+  // 而不是 requireCapability：为了会议没授权把整个日历同步一起拖失败不成比例
+  const syncVc =
+    config["syncVcMeetings"] === true &&
+    hasCapability(config, "meetings", ctx.dataDir);
 
   if (!syncCalendars && !syncVc) {
     return {
@@ -165,6 +170,18 @@ export async function pull(request: PullRequest): Promise<PullResult> {
       hasMore: false,
       deletedExternalIds: [],
     };
+  }
+
+  if (config["syncVcMeetings"] === true && !syncVc) {
+    // 用户开了会议同步却没授权：说一声，但不打断日历
+    logger.warn(
+      "会议同步已开启但「飞书会议同步」未勾选或未授权，本轮跳过会议",
+      { traceId: request.traceId, code: "FEISHU_VC_UNAUTHORIZED" },
+    );
+  }
+
+  if (syncCalendars) {
+    requireCapability(config, "calendar", ctx.dataDir);
   }
 
   const lastPull = lastCalendarPull.get(integrationId) ?? 0;

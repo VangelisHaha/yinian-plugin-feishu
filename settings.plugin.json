@@ -5,7 +5,7 @@
       "key": "howto",
       "type": "note",
       "label": "准备工作",
-      "text": "在[飞书开放平台](https://open.feishu.cn/app)建一个**自建应用**，开启「设备码流程」，并申请权限：任务 `task:task:read`、`task:task:write`；日历 `calendar:calendar:read`、`calendar:calendar.event:read`；临时会议 `vc:meeting.search:read`、`vc:meeting:readonly`、`vc:meeting.meetingevent:read`；再加 `offline_access`。改过权限后要**重新授权一次**，刷新拿不到新权限。"
+      "text": "在[飞书开放平台](https://open.feishu.cn/app)建一个**自建应用**。下面「要用哪些能力」勾了什么，就在开放平台申请对应的权限——**只勾你真的要用的**，不用的能力不必授权。\n\n- 飞书任务同步：`task:task:read`、`task:task:write`\n- 飞书日历同步：`calendar:calendar:read`、`calendar:calendar.event:read`\n- 飞书会议同步：`vc:meeting.search:read`、`vc:meeting:readonly`、`vc:meeting.meetingevent:read`\n- 把提醒发到飞书（单聊）：`im:message:send_as_bot`\n\n前三项要走一次用户授权，所以还要开启「设备码流程」并加 `offline_access`；**最后一项不需要授权**，它用应用自己的身份发消息。改过权限或改过勾选后要**重新授权一次**。"
     },
     {
       "key": "brand",
@@ -35,6 +35,18 @@
       "help": "存进本机加密文件（0600），界面永不回显，日志自动脱敏"
     },
     {
+      "key": "capabilities",
+      "type": "multi-enum",
+      "label": "要用哪些能力",
+      "default": [],
+      "options": [
+        { "value": "tasks", "label": "飞书任务同步" },
+        { "value": "calendar", "label": "飞书日历同步" },
+        { "value": "meetings", "label": "飞书会议同步" }
+      ],
+      "help": "授权范围按这里的勾选申请，勾一个授一个、勾三个一次授三个。改了勾选要重新点「开始授权」——飞书每次授权只给这一次请求的权限，不会叠加。一个都不勾也能用，那时只有下面的通知能力生效"
+    },
+    {
       "key": "startAuthorization",
       "type": "action",
       "label": "开始授权",
@@ -52,7 +64,8 @@
       "key": "authorizationStatus",
       "type": "action",
       "label": "查看授权状态",
-      "rpc": "feishu.authorizationStatus"
+      "rpc": "feishu.authorizationStatus",
+      "help": "逐项列出哪些能力已生效、哪些还差授权"
     },
     {
       "key": "notify",
@@ -63,7 +76,7 @@
           "key": "notifyNote",
           "type": "note",
           "label": "说明",
-          "text": "配好之后要在**设置 → 提醒与通知**里打开「飞书」这个渠道才会真的发。静默时段、按类型订阅都由一念统一管，这里只配怎么送。"
+          "text": "配好之后要在**设置 → 提醒与通知**里打开「飞书」这个渠道才会真的发。静默时段、按类型订阅都由一念统一管，这里只配怎么送。\n\n**这项能力不需要用户授权**：单聊是应用（机器人）自己发的，只要 App ID / App Secret 和开放平台上的 `im:message:send_as_bot` 权限。"
         },
         {
           "key": "notifyMode",
@@ -71,10 +84,10 @@
           "label": "投递方式",
           "default": "webhook",
           "options": [
-            { "value": "webhook", "label": "群机器人 Webhook（推荐）" },
-            { "value": "selfDm", "label": "给自己发单聊" }
+            { "value": "webhook", "label": "群机器人 Webhook（纯文本）" },
+            { "value": "botDm", "label": "应用给你发单聊卡片（推荐）" }
           ],
-          "help": "Webhook 不需要额外权限，把地址填进来就能用；单聊要在开放平台补 im:message.send_as_user 并重新授权"
+          "help": "单聊是排版好的消息卡片，带截止时间、优先级、标签和「在一念中打开」按钮；Webhook 只能发纯文本，但零配置、连权限都不用申请"
         },
         {
           "key": "notifyWebhookUrl",
@@ -85,11 +98,18 @@
           "help": "飞书群 → 设置 → 群机器人 → 添加自定义机器人，复制它的 Webhook 地址。建议建一个只有自己的群"
         },
         {
+          "key": "notifyOpenId",
+          "type": "string",
+          "label": "接收人 Open ID",
+          "visibleWhen": { "field": "notifyMode", "equals": "botDm" },
+          "help": "留空则用授权账号自己（需要授权过任一同步能力）。一项能力都没授权时必须填——查 open_id 要用户身份，而通知本身不需要。形如 ou_xxxxxxxx，在开放平台的 API 调试台或通讯录里能查到"
+        },
+        {
           "key": "testNotification",
           "type": "action",
           "label": "发送测试通知",
           "rpc": "feishu.testNotification",
-          "help": "不经过一念的提醒调度，直接按上面的配置发一条"
+          "help": "不经过一念的提醒调度，直接按上面的配置发一条示例卡片"
         }
       ]
     }

@@ -30,8 +30,14 @@ import {
   takePendingDevice,
 } from "../dist/feishu/auth.mjs";
 import { FeishuApiError, FeishuClient } from "../dist/feishu/client.mjs";
+import { ALL_CAPABILITIES, scopesFor } from "../dist/feishu/capability.mjs";
 
 const CREDENTIALS = { appId: "cli_test", appSecret: "secret", brand: "feishu" };
+/**
+ * scope 现在由调用方按用户勾选的能力拼（`capability.mts`），不再是 auth 里的常量。
+ * 这里用全集，只为验证请求组装；按能力拼装本身由 `capability.test.mjs` 覆盖。
+ */
+const SCOPES = scopesFor(ALL_CAPABILITIES);
 const originalFetch = globalThis.fetch;
 const dirs = [];
 
@@ -81,7 +87,7 @@ describe("申请设备码", () => {
       },
     ]);
 
-    const device = await requestDeviceCode(CREDENTIALS);
+    const device = await requestDeviceCode(CREDENTIALS, SCOPES);
 
     assert.equal(device.deviceCode, "dc-1");
     assert.equal(device.userCode, "ABCD-1234");
@@ -99,7 +105,7 @@ describe("申请设备码", () => {
 
   it("国际版走 larksuite 端点", async () => {
     const calls = mockFetch([{ body: { device_code: "dc-1" } }]);
-    await requestDeviceCode({ ...CREDENTIALS, brand: "lark" });
+    await requestDeviceCode({ ...CREDENTIALS, brand: "lark" }, SCOPES);
     assert.match(calls[0].url, /accounts\.larksuite\.com/);
   });
 
@@ -108,7 +114,7 @@ describe("申请设备码", () => {
       { status: 400, body: { error: "invalid_client", error_description: "app not found" } },
     ]);
     await assert.rejects(
-      () => requestDeviceCode(CREDENTIALS),
+      () => requestDeviceCode(CREDENTIALS, SCOPES),
       (error) => error instanceof AuthError && error.kind === "config",
     );
   });
@@ -118,7 +124,7 @@ describe("申请设备码", () => {
       throw new Error("ECONNREFUSED");
     };
     await assert.rejects(
-      () => requestDeviceCode(CREDENTIALS),
+      () => requestDeviceCode(CREDENTIALS, SCOPES),
       (error) => error instanceof AuthError && error.kind === "network",
     );
   });

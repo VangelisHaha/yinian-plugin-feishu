@@ -75,7 +75,17 @@ interface Copy {
     loadingValue: string;
     days: (count: number) => string;
   };
+  /** 配置不全时那一行怎么写。**不能静默空**，理由见 `list` 里的注释。 */
+  blocked: Record<BlockedReason, { value: string; detail: string }>;
 }
+
+/**
+ * 为什么拉不了考勤。
+ *
+ * `capability` 是真实踩到的那个：用户在日历侧栏打开了叠加层，却没在插件设置里勾
+ * 「飞书考勤」——于是 token 里没有 `attendance:task:readonly`，而界面上什么都不说。
+ */
+type BlockedReason = "credentials" | "capability";
 
 const ZH: Copy = {
   badge: { worked: "班", overtime: "加", leave: "假", absent: "缺" },
@@ -100,6 +110,18 @@ const ZH: Copy = {
     loading: "考勤",
     loadingValue: "加载中",
     days: (count) => `${formatDays(count)} 天`,
+  },
+  blocked: {
+    credentials: {
+      value: "未配置",
+      detail: "插件设置里还没填 App ID / App Secret",
+    },
+    capability: {
+      value: "未勾选",
+      detail:
+        "去插件设置勾上「飞书考勤」，然后重新点一次「开始授权」——" +
+        "飞书每次授权只给这一次请求的权限，不勾就不会申请考勤的读取范围",
+    },
   },
 };
 
@@ -126,6 +148,18 @@ const EN: Copy = {
     loading: "Attendance",
     loadingValue: "loading…",
     days: (count) => `${formatDays(count)}d`,
+  },
+  blocked: {
+    credentials: {
+      value: "not set up",
+      detail: "App ID / App Secret are still empty in the plugin settings",
+    },
+    capability: {
+      value: "not enabled",
+      detail:
+        "Tick “飞书考勤” in the plugin settings, then re-run the authorization — " +
+        "Feishu only grants the scopes requested in that one round",
+    },
   },
 };
 
@@ -165,11 +199,11 @@ export async function list(
 
   const copy = copyFor(request.locale);
   const config = configOf();
+  const blocked = blockedResult(config, copy);
+  if (blocked) return blocked;
+
   const source = sourceFrom(config);
-  if (!source) {
-    // 没配 App ID / Secret 时不该报错：用户可能刚装上插件、还没配完
-    return {};
-  }
+  if (!source) return {};
 
   // 记下用户在看哪段时间，并确保后台刷新在跑。**不 await**——契约要求 list 只读缓存
   noteInterest(source, request.from, request.to);
@@ -335,21 +369,85 @@ export function toStats(days: AttendanceDay[], copy: Copy): OverlaySummaryItem[]
   return stats;
 }
 
-/** 配置齐不齐。缺凭据时返回 null，调用方安静地返回空。 */
+/**
+ * 配置不全时该显示什么。`null` 表示配置没问题。
+ *
+ * **不要静默返回空。** 用户已经在日历侧栏把这个 provider 打开了——那是一次显式的授权
+ * 动作，界面理应给出回应。返回 `{}` 的表现是「开关开着、日历上什么都没有、插件日志里
+ * 也一条记录都没有」，用户无从判断是没配好还是坏了（0.5.0 首次验收就撞在这上面：
+ * 漏勾了「飞书考勤」这项能力）。
+ */
+export function blockedResult(
+  config: Record<string, unknown>,
+  copy: Copy,
+): CalendarOverlayListResult | null {
+  const reason = whyBlocked(config);
+  if (!reason) return null;
+  return {
+    sidebarStats: [
+      {
+        key: "blocked",
+        label: copy.stat.loading,
+        value: copy.blocked[reason].value,
+        // alert 档在侧栏是允许的，而它确实是「需要处理」：不处理就永远没有数据。
+        // 契约要求 alert 必须带 detail，否则宿主降级成 strong
+        tone: "alert",
+        detail: copy.blocked[reason].detail,
+      },
+    ],
+  };
+}
+
+/**
+ * 配置为什么不够用。`null` 表示没问题。
+ *
+ * 与 `sourceFrom` 分开是为了让 `list` 能把原因**显示出来**——静默返回空会让用户面对
+ * 「开关开着、日历上什么都没有、日志里也没有」这种无从下手的状态。
+ */
+function whyBlocked(config: Record<string, unknown>): BlockedReason | null {
+  const credentials = credentialsFrom(config);
+  if (!credentials.appId || !credentials.appSecret) return "credentials";
+  if (!capabilitiesFrom(config).includes("attendance")) {
+    // 没勾这项能力，token 里也就没有 `attendance:task:readonly`。硬拉只会撞一个 403，
+    // 而那会被记成插件错误、还可能烧断路器
+    logOnce(
+      "勾了日历叠加但没勾「飞书考勤」这项能力，考勤拉不了",
+      "FEISHU_ATTENDANCE_CAPABILITY_MISSING",
+      { hint: "插件设置里勾上「飞书考勤」并重新授权" },
+    );
+    return "capability";
+  }
+  return null;
+}
+
+/** 已经过了 `whyBlocked` 才调。 */
 function sourceFrom(config: Record<string, unknown>): AttendanceSource | null {
   const credentials = credentialsFrom(config);
   if (!credentials.appId || !credentials.appSecret) return null;
-  if (!capabilitiesFrom(config).includes("attendance")) {
-    // 用户没勾「飞书考勤」这项能力，token 里也就没有对应 scope。
-    // 硬拉只会撞一个 403，而它会被记成插件错误
-    return null;
-  }
   const utcOffset = String(config["attendanceUtcOffset"] ?? "").trim();
   return {
     credentials,
     dataDir: context().dataDir,
     ...(utcOffset ? { utcOffset } : {}),
   };
+}
+
+/**
+ * 同一条诊断只记一次。
+ *
+ * `calendarOverlay.list` 跟着用户翻月走，每次都记会把插件日志刷满，而真正的错误就被
+ * 埋掉了——那恰恰是这条日志存在的意义。
+ */
+const logged = new Set<string>();
+
+function logOnce(
+  message: string,
+  code: string,
+  detail: Record<string, unknown>,
+): void {
+  if (logged.has(code)) return;
+  logged.add(code);
+  logger.warn(message, { code, detail });
 }
 
 /** 工作日要不要也打角标。默认**开**——用户装它就是想看到出勤。 */

@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "yinian-feishu",
   "name": "飞书",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "author": "vangelis",
   "description": "把飞书任务、日历（含会议）与考勤同步进一念，并把一念的提醒发成飞书卡片",
   "homepage": "https://github.com/VangelisHaha/yinian-plugin-feishu",

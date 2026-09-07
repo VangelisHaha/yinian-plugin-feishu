@@ -22,6 +22,7 @@ import {
   splitSpan,
 } from "../dist/feishu/attendance.mjs";
 import {
+  blockedResult,
   copyForTests,
   toBadge,
   toStats,
@@ -407,5 +408,43 @@ describe("侧栏统计", () => {
     const stats = toStats([], ZH);
     assert.equal(stats[0].value, "0 天");
     assert.equal(stats[0].tone, "mute");
+  });
+});
+
+describe("配置不全时要说话", () => {
+  // 0.5.0 首次验收就撞在这上面：用户在侧栏打开了叠加层，却漏勾了「飞书考勤」这项能力，
+  // 于是插件静默返回空——界面上什么都没有、日志里也一条记录都没有，无从下手
+  const configured = {
+    appId: "cli_x",
+    appSecret: "s",
+    capabilities: ["tasks", "calendar", "meetings"],
+  };
+
+  it("没勾「飞书考勤」时给出一行 alert，而不是空", () => {
+    const result = blockedResult(configured, ZH);
+    const rows = result.sidebarStats;
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].value, "未勾选");
+    assert.equal(rows[0].tone, "alert");
+    // 契约要求 alert 必须带 detail，否则宿主降级成 strong
+    assert.ok(rows[0].detail, "alert 档必须说清为什么");
+    assert.match(rows[0].detail, /重新/);
+    assert.equal(result.badges, undefined, "拉不到就不该有角标");
+  });
+
+  it("没填凭据时说的是另一件事", () => {
+    const result = blockedResult({ capabilities: ["attendance"] }, ZH);
+    assert.equal(result.sidebarStats[0].value, "未配置");
+  });
+
+  it("配置齐了就不拦", () => {
+    assert.equal(
+      blockedResult({ ...configured, capabilities: ["attendance"] }, ZH),
+      null,
+    );
+  });
+
+  it("英文界面出英文", () => {
+    assert.equal(blockedResult(configured, EN).sidebarStats[0].value, "not enabled");
   });
 });

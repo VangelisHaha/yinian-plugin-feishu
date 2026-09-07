@@ -73,6 +73,8 @@ const HOOK_TOPICS = new Set([
   "schedule_block.deleted",
 ]);
 
+const SYNC_RESOURCES = new Set(["task", "event"]);
+
 const SYNC_ACTIONS = new Set([
   "list",
   "get",
@@ -96,6 +98,17 @@ const SYNC_FIELDS = new Set([
 ]);
 
 const SYNC_MODES = new Set(["interval", "manual", "eventDriven"]);
+
+/** 日期标记类型，契约 §8.3。四个之外的取值宿主直接拒绝安装。 */
+const DAY_MARK_KINDS = new Set([
+  "lunar",
+  "solar_term",
+  "festival",
+  "holiday",
+]);
+
+/** 日历叠加层贴在哪，契约 §8.4。 */
+const OVERLAY_SURFACES = new Set(["dayBadge", "summary", "sidebarStat"]);
 
 /** 宿主强制的间隔下限。 */
 const MIN_INTERVAL_FLOOR = 60;
@@ -211,11 +224,43 @@ function checkPermissions(manifest, where) {
 function checkContributes(manifest, where) {
   const contributes = manifest.contributes ?? {};
 
+  // 契约 §3.4 的硬约束：什么都不贡献的插件永远不会被调用，装进去也是死的。
+  // `syncStrategy` 与 `settingsPanel` 不算——它们是修饰别的扩展点的，自己不是入口
+  const entryPoints = [
+    "sync",
+    "replica",
+    "notificationChannel",
+    "dayMarks",
+    "calendarOverlay",
+    "hooks",
+  ];
+  const contributed = entryPoints.filter((key) => {
+    const value = contributes[key];
+    if (Array.isArray(value)) return value.length > 0;
+    return Boolean(value);
+  });
+  if (contributed.length === 0) {
+    fail(
+      where,
+      `contributes 至少要有一个扩展点（${entryPoints.join(" / ")}），否则插件永远不会被调用`,
+    );
+  }
+
   if (contributes.sync) {
     const sync = contributes.sync;
-    if (!Array.isArray(sync.resources) || sync.resources.length === 0) {
+    const resources = Array.isArray(sync.resources) ? sync.resources : [];
+    if (resources.length === 0) {
       fail(where, "contributes.sync 需要非空的 resources");
     }
+    for (const resource of resources) {
+      if (!SYNC_RESOURCES.has(resource)) {
+        fail(where, `未知的 sync resource「${resource}」`);
+      }
+    }
+    // 纯 event 插件不会收到 sync.push，也不吃 task 字段门控（一念 docs/11 §5.1.1）
+    const eventOnly =
+      resources.length > 0 && resources.every((item) => item === "event");
+
     const capabilities = sync.capabilities ?? {};
     if (!Array.isArray(capabilities.actions) || capabilities.actions.length === 0) {
       fail(where, "contributes.sync.capabilities.actions 不能为空");
@@ -228,11 +273,26 @@ function checkContributes(manifest, where) {
       if (!capabilities.actions.includes("list")) {
         warn(where, "capabilities.actions 没有 list，宿主无法拉取，只能靠回写");
       }
+      if (eventOnly) {
+        const extra = capabilities.actions.filter((action) => action !== "list");
+        if (extra.length > 0) {
+          warn(
+            where,
+            `event 是 pull-only，「${extra.join("、")}」永远不会被调用，写 ["list"] 就够`,
+          );
+        }
+      }
     }
     for (const field of capabilities.fields ?? []) {
       if (!SYNC_FIELDS.has(field)) {
         fail(where, `未知的 sync field「${field}」`);
       }
+    }
+    if (eventOnly && (capabilities.fields ?? []).length > 0) {
+      warn(
+        where,
+        "capabilities.fields 是 task 字段的门控，纯 event 插件留空即可",
+      );
     }
     if (!contributes.syncStrategy) {
       fail(where, "声明了 sync 就必须声明 syncStrategy");
@@ -265,6 +325,57 @@ function checkContributes(manifest, where) {
     }
   }
 
+  // 多端同步传输（契约 §5.4）。**与 sync 互斥**：sync 接外部系统、replica 搬同步
+  // 字节，两者在「远端删除了怎么办」上语义正好相反（sync 保留本地、replica 必须真删），
+  // 混在一个插件里会让用户分不清它在同步什么，设置面板语义也完全不同。
+  if (contributes.replica) {
+    const replica = contributes.replica;
+    if (contributes.sync) {
+      fail(
+        where,
+        "contributes.sync 与 contributes.replica 不能同时声明：前者接外部系统、后者搬同步字节，语义相反",
+      );
+    }
+    if (contributes.syncStrategy) {
+      warn(
+        where,
+        "replica 不需要 syncStrategy：多端同步的调度由一念核心掌握，与 interval / manual 无关",
+      );
+    }
+    for (const key of ["id", "name"]) {
+      if (typeof replica[key] !== "string" || !replica[key].trim()) {
+        fail(where, `contributes.replica 缺少 ${key}`);
+      }
+    }
+    const capabilities = replica.capabilities ?? {};
+    for (const key of ["watch", "delete"]) {
+      if (key in capabilities && typeof capabilities[key] !== "boolean") {
+        fail(where, `contributes.replica.capabilities.${key} 必须是 boolean`);
+      }
+    }
+    if (capabilities.delete === false || capabilities.delete === undefined) {
+      warn(
+        where,
+        "capabilities.delete 不为 true 时压实不可用，远端日志只增不减——界面上会如实提示用户",
+      );
+    }
+    if ("maxObjectBytes" in capabilities) {
+      const max = capabilities.maxObjectBytes;
+      if (typeof max !== "number" || !Number.isFinite(max) || max <= 0) {
+        fail(
+          where,
+          "contributes.replica.capabilities.maxObjectBytes 必须是正数（解码后字节）",
+        );
+      }
+    }
+    if (capabilities.watch === true) {
+      warn(
+        where,
+        "声明了 capabilities.watch 就必须每 heartbeatSeconds 至少发一次 replica.heartbeat（没变更时也要发）：宿主按 3 个周期判活，不发会被反复 unwatch + watch 重建，而界面上会显示「已退回轮询」",
+      );
+    }
+  }
+
   for (const topic of contributes.hooks ?? []) {
     if (!HOOK_TOPICS.has(topic)) {
       fail(where, `未知的 hook topic「${topic}」`);
@@ -276,6 +387,139 @@ function checkContributes(manifest, where) {
     for (const key of ["id", "name"]) {
       if (typeof channel[key] !== "string" || !channel[key]) {
         fail(where, `notificationChannel 缺少 ${key}`);
+      }
+    }
+  }
+
+  const dayMarks = contributes.dayMarks;
+  if (dayMarks) {
+    const providers = dayMarks.providers;
+    if (!Array.isArray(providers) || providers.length === 0) {
+      fail(where, "contributes.dayMarks 需要非空的 providers");
+    } else {
+      const seen = new Set();
+      for (const provider of providers) {
+        if (!provider || typeof provider !== "object") {
+          fail(where, "dayMarks.providers 的每一项必须是对象");
+          continue;
+        }
+        for (const key of ["id", "name"]) {
+          if (typeof provider[key] !== "string" || !provider[key]) {
+            fail(where, `dayMarks.providers 里有一项缺少 ${key}`);
+          }
+        }
+        // provider id 在插件内必须唯一：宿主对外用 `<pluginId>/<providerId>`，
+        // 撞了之后两个 provider 的标记会互相覆盖，而且不报错
+        if (typeof provider.id === "string" && provider.id) {
+          if (seen.has(provider.id)) {
+            fail(where, `dayMarks.providers 里 id「${provider.id}」重复`);
+          }
+          seen.add(provider.id);
+        }
+        const kinds = provider.kinds;
+        if (!Array.isArray(kinds) || kinds.length === 0) {
+          fail(
+            where,
+            `dayMarks.providers「${provider.id ?? "?"}」需要非空的 kinds`,
+          );
+        } else {
+          for (const kind of kinds) {
+            if (!DAY_MARK_KINDS.has(kind)) {
+              fail(
+                where,
+                `未知的 dayMark kind「${kind}」，合法取值：${[...DAY_MARK_KINDS].join(" / ")}`,
+              );
+            }
+          }
+        }
+        if (
+          provider.coversUntil !== undefined &&
+          !/^\d{4}-\d{2}-\d{2}$/.test(String(provider.coversUntil))
+        ) {
+          fail(
+            where,
+            `dayMarks.providers「${provider.id ?? "?"}」的 coversUntil 必须是 YYYY-MM-DD`,
+          );
+        }
+        if (
+          provider.region !== undefined &&
+          !/^[A-Z]{2}$/.test(String(provider.region))
+        ) {
+          warn(
+            where,
+            `dayMarks.providers「${provider.id ?? "?"}」的 region 应该是 ISO 3166-1 alpha-2（如 CN / JP）`,
+          );
+        }
+      }
+    }
+  }
+
+  const overlay = contributes.calendarOverlay;
+  if (overlay) {
+    const providers = overlay.providers;
+    if (!Array.isArray(providers) || providers.length === 0) {
+      fail(where, "contributes.calendarOverlay 需要非空的 providers");
+    } else {
+      const seen = new Set();
+      for (const provider of providers) {
+        if (!provider || typeof provider !== "object") {
+          fail(where, "calendarOverlay.providers 的每一项必须是对象");
+          continue;
+        }
+        for (const key of ["id", "name"]) {
+          if (typeof provider[key] !== "string" || !provider[key].trim()) {
+            fail(where, `calendarOverlay.providers 里有一项缺少 ${key}`);
+          }
+        }
+        // 理由同 dayMarks，而这里更要紧：provider id 是**启用开关**的身份，
+        // 而那个开关是授权闸门——认错人等于把 A 的授权给了 B
+        if (typeof provider.id === "string" && provider.id.trim()) {
+          if (seen.has(provider.id)) {
+            fail(
+              where,
+              `calendarOverlay.providers 里 id「${provider.id}」重复`,
+            );
+          }
+          seen.add(provider.id);
+        }
+        const surfaces = provider.surfaces;
+        if (!Array.isArray(surfaces) || surfaces.length === 0) {
+          fail(
+            where,
+            `calendarOverlay.providers「${provider.id ?? "?"}」需要非空的 surfaces`,
+          );
+        } else {
+          for (const surface of surfaces) {
+            if (!OVERLAY_SURFACES.has(surface)) {
+              fail(
+                where,
+                `未知的 calendarOverlay surface「${surface}」，合法取值：${[...OVERLAY_SURFACES].join(" / ")}`,
+              );
+            }
+          }
+        }
+        // description 是用户决定要不要授权的唯一依据：这个扩展点默认关闭，
+        // 用户在侧栏看到的就是「名字 + 这一句」。只写「飞书考勤」说不清会显示
+        // 什么、数据从哪来，而他要据此把外部账号的个人数据交出来
+        if (
+          provider.description === undefined ||
+          !String(provider.description).trim()
+        ) {
+          warn(
+            where,
+            `calendarOverlay.providers「${provider.id ?? "?"}」建议给 description——` +
+              "它是用户决定要不要授权的唯一依据，要写清会显示什么、数据从哪来",
+          );
+        }
+        // 宿主一律按偏好盖写启用态，manifest 自称无效。声明了只会让作者以为
+        // 装上就生效，然后去查为什么没有数据
+        if (provider.enabled !== undefined) {
+          warn(
+            where,
+            `calendarOverlay.providers「${provider.id ?? "?"}」不要声明 enabled——` +
+              "启用态由宿主按用户偏好盖写，默认关闭",
+          );
+        }
       }
     }
   }
@@ -448,6 +692,8 @@ function checkHandlersMatchContributes(manifest, registered) {
   }
   if ((contributes.hooks ?? []).length > 0) required.push("hook.dispatch");
   if (contributes.notificationChannel) required.push("notify.send");
+  if (contributes.dayMarks) required.push("dayMarks.list");
+  if (contributes.calendarOverlay) required.push("calendarOverlay.list");
 
   for (const method of required) {
     if (!registered.has(method)) {
@@ -469,6 +715,15 @@ function checkHandlersMatchContributes(manifest, registered) {
     warn(
       where,
       "注册了 notify.send 但没声明 notificationChannel，不会被调用",
+    );
+  }
+  if (registered.has("dayMarks.list") && !contributes.dayMarks) {
+    warn(where, "注册了 dayMarks.list 但没声明 contributes.dayMarks，不会被调用");
+  }
+  if (registered.has("calendarOverlay.list") && !contributes.calendarOverlay) {
+    warn(
+      where,
+      "注册了 calendarOverlay.list 但没声明 contributes.calendarOverlay，不会被调用",
     );
   }
 }

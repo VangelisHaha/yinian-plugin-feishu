@@ -24,15 +24,23 @@
  */
 
 /** 一项可以单独勾选的能力。 */
-export type Capability = "tasks" | "calendar" | "meetings";
+export type Capability = "tasks" | "calendar" | "meetings" | "attendance";
 
 export const ALL_CAPABILITIES: readonly Capability[] = [
   "tasks",
   "calendar",
   "meetings",
+  "attendance",
 ];
 
-/** 每项能力要的 scope。`offline_access` 不在这里，它是所有能力共用的前提。 */
+/**
+ * 每项能力要的 scope。`offline_access` 不在这里，它是所有能力共用的前提。
+ *
+ * `attendance` 多要一个 `contact:user.id:readonly`：考勤接口按 `employee_id`
+ * （飞书的 `user_id`）查，而那个值要从 `authen/v1/user_info` 取。少了它 `user_id`
+ * 回空串，表现是「一条考勤都没有」而不报错——所以它和考勤本身绑在同一项勾选里，
+ * 不单独列。
+ */
 const CAPABILITY_SCOPES: Record<Capability, readonly string[]> = {
   tasks: ["task:task:read", "task:task:write"],
   calendar: ["calendar:calendar:read", "calendar:calendar.event:read"],
@@ -41,6 +49,7 @@ const CAPABILITY_SCOPES: Record<Capability, readonly string[]> = {
     "vc:meeting:readonly",
     "vc:meeting.meetingevent:read",
   ],
+  attendance: ["attendance:task:readonly", "contact:user.id:readonly"],
 };
 
 /**
@@ -55,6 +64,7 @@ const CAPABILITY_LABELS: Record<Capability, string> = {
   tasks: "飞书任务同步",
   calendar: "飞书日历同步",
   meetings: "飞书会议同步",
+  attendance: "飞书考勤",
 };
 
 export function capabilityLabel(capability: Capability): string {

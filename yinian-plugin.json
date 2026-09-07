@@ -2,11 +2,11 @@
   "manifestVersion": 1,
   "id": "yinian-feishu",
   "name": "飞书",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": "vangelis",
-  "description": "把飞书任务与日历（含会议）同步进一念，并把一念的提醒发成飞书卡片",
+  "description": "把飞书任务、日历（含会议）与考勤同步进一念，并把一念的提醒发成飞书卡片",
   "homepage": "https://github.com/VangelisHaha/yinian-plugin-feishu",
-  "minHostVersion": "0.12.0",
+  "minHostVersion": "0.12.33",
   "runtime": {
     "kind": "process",
     "node": ">=20",
@@ -21,20 +21,38 @@
       "open.larksuite.com",
       "accounts.larksuite.com"
     ],
-    "spawn": ["/bin/ps"],
+    "spawn": [
+      "/bin/ps"
+    ],
     "fs": [],
     "api": []
   },
   "contributes": {
     "sync": {
-      "resources": ["task", "event"],
+      "resources": [
+        "task",
+        "event"
+      ],
       "capabilities": {
-        "actions": ["list", "get", "update", "complete", "reopen"],
-        "fields": ["title", "notes", "due_at"]
+        "actions": [
+          "list",
+          "get",
+          "update",
+          "complete",
+          "reopen"
+        ],
+        "fields": [
+          "title",
+          "notes",
+          "due_at"
+        ]
       }
     },
     "syncStrategy": {
-      "modes": ["interval", "manual"],
+      "modes": [
+        "interval",
+        "manual"
+      ],
       "defaultIntervalSeconds": 60,
       "minIntervalSeconds": 60
     },
@@ -43,8 +61,26 @@
       "name": "飞书",
       "supportsActions": false
     },
+    "calendarOverlay": {
+      "providers": [
+        {
+          "id": "attendance",
+          "name": "飞书考勤",
+          "surfaces": [
+            "dayBadge",
+            "sidebarStat"
+          ],
+          "description": "在日历格子右上角标出出勤、加班、请假与打卡异常，并在侧栏「负载」里统计天数。数据来自飞书考勤的打卡记录，只读你自己的"
+        }
+      ]
+    },
     "hooks": [],
-    "settingsPanel": ["settings.plugin.json", "settings.integration.json"]
+    "settingsPanel": [
+      "settings.plugin.json",
+      "settings.integration.json"
+    ]
   },
-  "authMode": ["oauth-device"]
+  "authMode": [
+    "oauth-device"
+  ]
 }

@@ -5,7 +5,7 @@
       "key": "howto",
       "type": "note",
       "label": "准备工作",
-      "text": "在[飞书开放平台](https://open.feishu.cn/app)建一个**自建应用**。下面「要用哪些能力」勾了什么，就在开放平台申请对应的权限——**只勾你真的要用的**，不用的能力不必授权。\n\n- 飞书任务同步：`task:task:read`、`task:task:write`\n- 飞书日历同步：`calendar:calendar:read`、`calendar:calendar.event:read`\n- 飞书会议同步：`vc:meeting.search:read`、`vc:meeting:readonly`、`vc:meeting.meetingevent:read`\n- 把提醒发到飞书（单聊）：`im:message:send_as_bot`\n\n前三项要走一次用户授权，所以还要开启「设备码流程」并加 `offline_access`；**最后一项不需要授权**，它用应用自己的身份发消息。改过权限或改过勾选后要**重新授权一次**。"
+      "text": "在[飞书开放平台](https://open.feishu.cn/app)建一个**自建应用**。下面「要用哪些能力」勾了什么，就在开放平台申请对应的权限——**只勾你真的要用的**，不用的能力不必授权。\n\n- 飞书任务同步：`task:task:read`、`task:task:write`\n- 飞书日历同步：`calendar:calendar:read`、`calendar:calendar.event:read`\n- 飞书会议同步：`vc:meeting.search:read`、`vc:meeting:readonly`、`vc:meeting.meetingevent:read`\n- 飞书考勤：`attendance:task:readonly`、`contact:user.id:readonly`\n- 把提醒发到飞书（单聊）：`im:message:send_as_bot`\n\n前四项要走一次用户授权，所以还要开启「设备码流程」并加 `offline_access`；**最后一项不需要授权**，它用应用自己的身份发消息。改过权限或改过勾选后要**重新授权一次**。"
     },
     {
       "key": "brand",
@@ -14,8 +14,14 @@
       "required": true,
       "default": "feishu",
       "options": [
-        { "value": "feishu", "label": "飞书（中国版）" },
-        { "value": "lark", "label": "Lark（国际版）" }
+        {
+          "value": "feishu",
+          "label": "飞书（中国版）"
+        },
+        {
+          "value": "lark",
+          "label": "Lark（国际版）"
+        }
       ],
       "help": "选错会一直报「应用不存在」，两个版本的账号体系是分开的"
     },
@@ -40,9 +46,22 @@
       "label": "要用哪些能力",
       "default": [],
       "options": [
-        { "value": "tasks", "label": "飞书任务同步" },
-        { "value": "calendar", "label": "飞书日历同步" },
-        { "value": "meetings", "label": "飞书会议同步" }
+        {
+          "value": "tasks",
+          "label": "飞书任务同步"
+        },
+        {
+          "value": "calendar",
+          "label": "飞书日历同步"
+        },
+        {
+          "value": "meetings",
+          "label": "飞书会议同步"
+        },
+        {
+          "value": "attendance",
+          "label": "飞书考勤"
+        }
       ],
       "help": "授权范围按这里的勾选申请，勾一个授一个、勾三个一次授三个。改了勾选要重新点「开始授权」——飞书每次授权只给这一次请求的权限，不会叠加。一个都不勾也能用，那时只有下面的通知能力生效"
     },
@@ -68,6 +87,34 @@
       "help": "逐项列出哪些能力已生效、哪些还差授权"
     },
     {
+      "key": "attendance",
+      "type": "group",
+      "label": "把飞书考勤画到日历上",
+      "fields": [
+        {
+          "key": "attendanceNote",
+          "type": "note",
+          "label": "说明",
+          "text": "勾上上面的「飞书考勤」并重新授权之后，还要在**日历侧栏的「日历叠加」**里把「飞书考勤」打开才会真的显示——这是刻意的两步：装插件与「让它读我的考勤」是两次独立的确认，关着的时候一念根本不会去调它。\n\n打开后月视图格子的右上角会出现角标（**班**出勤、**加**休息日加班、**假**请假、**异**打卡异常），鼠标悬浮看打卡时间；侧栏的「负载」卡里会多几行天数统计。考勤在后台每 15 分钟刷一次，翻月不会等网络。"
+        },
+        {
+          "key": "attendanceShowWorkdays",
+          "type": "boolean",
+          "label": "普通工作日也打角标",
+          "default": true,
+          "help": "关掉之后只显示加班、请假与打卡异常这些**非常态**的日子。普通出勤一个月有二十来天，每天一个「班」接近噪声——但想一眼看到「这个月我到底出勤了哪些天」时它是必要的，所以默认开着。纯休息日无论开关都不画：日历本来就知道周六周日是哪几天"
+        },
+        {
+          "key": "attendanceUtcOffset",
+          "type": "string",
+          "label": "考勤时区偏移",
+          "default": "+08:00",
+          "maxLength": 6,
+          "help": "打卡时刻按这个偏移渲染。填公司所在时区，不是你此刻所在的时区——出差时看到的应当还是公司时区的那个打卡时间"
+        }
+      ]
+    },
+    {
       "key": "notify",
       "type": "group",
       "label": "把一念的提醒发到飞书",
@@ -84,8 +131,14 @@
           "label": "投递方式",
           "default": "webhook",
           "options": [
-            { "value": "webhook", "label": "群机器人 Webhook（纯文本）" },
-            { "value": "botDm", "label": "应用给你发单聊卡片（推荐）" }
+            {
+              "value": "webhook",
+              "label": "群机器人 Webhook（纯文本）"
+            },
+            {
+              "value": "botDm",
+              "label": "应用给你发单聊卡片（推荐）"
+            }
           ],
           "help": "单聊是排版好的消息卡片，带截止时间、优先级、标签和「在一念中打开」按钮；Webhook 只能发纯文本，但零配置、连权限都不用申请"
         },
@@ -94,14 +147,20 @@
           "type": "string",
           "label": "Webhook 地址",
           "format": "secret",
-          "visibleWhen": { "field": "notifyMode", "equals": "webhook" },
+          "visibleWhen": {
+            "field": "notifyMode",
+            "equals": "webhook"
+          },
           "help": "飞书群 → 设置 → 群机器人 → 添加自定义机器人，复制它的 Webhook 地址。建议建一个只有自己的群"
         },
         {
           "key": "notifyOpenId",
           "type": "string",
           "label": "接收人 Open ID",
-          "visibleWhen": { "field": "notifyMode", "equals": "botDm" },
+          "visibleWhen": {
+            "field": "notifyMode",
+            "equals": "botDm"
+          },
           "help": "留空则用授权账号自己（需要授权过任一同步能力）。一项能力都没授权时必须填——查 open_id 要用户身份，而通知本身不需要。形如 ou_xxxxxxxx，在开放平台的 API 调试台或通讯录里能查到"
         },
         {

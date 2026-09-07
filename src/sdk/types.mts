@@ -531,6 +531,173 @@ export interface DayMarksListResult {
   providers?: DayMarkProviderSpec[];
 }
 
+// ── 日历叠加层 ───────────────────────────────────────────────────────────
+//
+// 见一念仓库 docs/11-plugin-architecture.md §8.4。
+//
+// 把**外部系统里属于这个用户的信息**贴到日历上：某一天格子右上角的一个角标
+// （考勤的「班」「加」「假」）、视图右上角的一条汇总、以及日历侧栏底部那张
+// 「负载」卡里的几行统计。
+//
+// ## 与 dayMarks 的分野：公开知识 vs 个人数据
+//
+// 两者的数据形状很像（都是「挂在某一天上的一条短标签」），但**不是一件事**：
+// 日期标记谁算都一样（农历、节气、法定假），不需要账号，**装上即生效**；
+// 叠加层属于这个用户（我的打卡、我的请假），要外部凭据，**默认关闭、必须由用户
+// 在日历侧栏逐个显式打开，关着的时候宿主根本不会调 `calendarOverlay.list`**。
+//
+// 所以「用户第一次调到你」这件事本身就是授权信号——在那之前不要去拉他的数据。
+//
+// ## 核心不认识任何具体指标
+//
+// 「出勤」「加班」这些词一个都不在宿主代码里。宿主收到的是 `(标签, 值)` 对，
+// 照着排版画出来。文案与格式化（含单位、小数位）100% 归你，所以宿主会把当前
+// 界面语言下发给你（[`CalendarOverlayListRequest.locale`]）——它不认识「出勤」，
+// 也就无从翻译它。
+//
+// 反过来**颜色与字体一律归宿主**：`tone` 是语义档位而不是色值。
+
+/** 会往哪儿贴。manifest 的 `contributes.calendarOverlay.providers[].surfaces`。 */
+export type OverlaySurface = "dayBadge" | "summary" | "sidebarStat";
+
+/**
+ * 语义档位，**不是颜色**。
+ *
+ * 一念的视觉体系只有单一强调色，且强调色有四种既定语义（今日 / 选中 / 高优先级 /
+ * 逾期）。让插件带色相进来，结果一定是两个插件的颜色互相打架、深色主题下对比度
+ * 不够，而适配主题这件事没法指望插件做。
+ *
+ * - `neutral`：默认，一条普通信息
+ * - `strong`：这一项值得被看见（今天加了班）
+ * - `mute`：弱化——没有数据、不适用、已过去、**值是零**
+ * - `alert`：**需要处理**（工时对不上、缺卡）
+ *
+ * 两条硬规则：`alert` **不能用在角标上**（角标就在格子里，用强调色会和「今天」
+ * 「高优先级」抢注意力，宿主会降级成 `strong`）；`alert` **必须给 `detail`**，
+ * 只把数字标红而不说为什么，用户看到了也不知道该做什么（宿主同样会降级）。
+ */
+export type OverlayTone = "neutral" | "strong" | "mute" | "alert";
+
+/**
+ * 侧栏统计行的行首标记。**封闭的一小组形状，不是图标位。**
+ *
+ * 不收 SVG、不收 emoji、不收字符：一念的形状是语义载体而不是装饰（虚线块专指
+ * 排期块、圆勾圈专指任务、镂空方块专指同步来源）。塞一个虚线方块进侧栏，用户会去
+ * 日历上找它对应哪段排期，而根本没有。
+ *
+ * - `none`（默认）：只占位、不画。指标在日历上没有对应的东西时就该用它
+ * - `bar`：中性竖条，读作「一个量」（工时、天数）
+ * - `dot`：中性实心点，读作「一类事」（请假、缺卡）
+ *
+ * **只在 `sidebarStat` 上生效**——右上角那条汇总没有标记列。
+ */
+export type OverlayMark = "none" | "bar" | "dot";
+
+/** 贴在某一天格子右上角的一个角标。 */
+export interface DayBadge {
+  /**
+   * 本地日期键，**严格** `YYYY-MM-DD`。
+   *
+   * `2026-9-5` 会被宿主丢弃（当 Map key 时和 `2026-09-05` 对不上），
+   * 而现象是「那天没有角标」且不报错。
+   */
+  date: string;
+  /**
+   * 角标文字，**1–2 字**。
+   *
+   * 那一行还有日号、农历标签、休 / 班角标，空间只有那么大；超过 4 字符会被截断。
+   */
+  label: string;
+  /** 缺省 `neutral`。`alert` 在角标上会被降级为 `strong`。 */
+  tone?: OverlayTone;
+  /**
+   * 悬浮时的完整说明。
+   *
+   * 角标只有一两个字，这里是它的**唯一解释来源**——「加」到底是加班申请还是实际
+   * 加了几小时，不悬浮就看不出来。
+   */
+  detail?: string;
+}
+
+/**
+ * 汇总条里的一格，或侧栏那张卡里的一行。
+ *
+ * 两处**共用同一形状**，由你决定每个指标放哪：
+ *
+ * - 右上角那条是**横排**、始终在视野里、但很窄——适合一两个最该被一眼看到的
+ *   （比如「排期和出勤对不上」）。
+ * - 侧栏那张卡是**竖排**、有独立的标签列与数字列、空间宽松——适合一组同类指标
+ *   铺开（出勤 / 排期 / 加班 / 请假）。
+ *
+ * **同一个指标不要两处都给**：那是同一句话说两遍，而两处的数字万一因为取数时机
+ * 不同而不一致，用户只会觉得其中一个是错的。
+ */
+export interface OverlaySummaryItem {
+  /** 同一次返回里唯一，宿主用它做渲染 key。**不显示给用户。** */
+  key: string;
+  /** 指标名，**2–3 字**（「出勤」「加班」）。宿主不翻译，所以按 `locale` 自己给。 */
+  label: string;
+  /**
+   * 已格式化好的**字符串**，宿主原样显示。
+   *
+   * 不是数字：宿主不知道 `16.5` 该显示成 `16.5d`、`16.5 天` 还是 `16h30m`。
+   * 代价是宿主没法对它做算术——所以「这一项是零」要用 `tone: "mute"` 说，
+   * `"0d"` / `"—"` / `"暂无"` 宿主都只当普通文本。
+   */
+  value: string;
+  /** 缺省 `neutral`。用 `alert` 时**必须给 `detail`**，否则宿主降级为 `strong`。 */
+  tone?: OverlayTone;
+  /** 行首标记，缺省 `none`。**只在 `sidebarStat` 上生效。** */
+  mark?: OverlayMark;
+  /** 悬浮说明。 */
+  detail?: string;
+}
+
+export interface CalendarOverlayListRequest {
+  /** 要问哪个 provider，对应 manifest 里声明的 `id`（不带插件前缀）。 */
+  providerId: string;
+  /**
+   * 角标区间起点，`YYYY-MM-DD` 闭区间。
+   *
+   * 这是当前视图看得见的**全部格子**——月视图是 42 天，含上个月末尾与下个月开头
+   * 那几天。
+   */
+  from: string;
+  /** 角标区间终点，闭区间。 */
+  to: string;
+  /**
+   * 汇总口径起点，`YYYY-MM-DD` 闭区间。**与 `from` 通常不相等。**
+   *
+   * 月视图下它是当月 1 号，而 `from` 是格子里的第一天（可能是上月 28 号）。
+   * 拿 42 天的范围去算「本月出勤」会多算六七天，**而界面上完全看不出错**——
+   * 这是这个扩展点最容易做错的地方，所以两个区间都是必填。
+   */
+  summaryFrom: string;
+  /** 汇总口径终点，闭区间。 */
+  summaryTo: string;
+  /**
+   * 当前界面语言（BCP 47，如 `zh-CN` / `en`）。
+   *
+   * 这个扩展点的文案 100% 由你给，宿主不认识「出勤」这个词、也就无从翻译它，
+   * 所以你是唯一能做本地化的人。认不出这个值时**按自己的默认语言输出，不要报错**。
+   */
+  locale: string;
+}
+
+export interface CalendarOverlayListResult {
+  /**
+   * 区间内的角标。**允许为空**——「这段时间没有考勤记录」不是错误。
+   *
+   * 同一天给多条时宿主只取第一条（你自己该挑好，宿主没有依据猜哪条更重要）；
+   * 多个插件各给一条时那一格最多画 2 个。
+   */
+  badges?: DayBadge[];
+  /** 视图右上角那条横排汇总，最多 6 项，超出丢弃。 */
+  summary?: OverlaySummaryItem[];
+  /** 侧栏「负载」卡里的竖排统计行，最多 4 项（宿主自己已经占了 3 行）。 */
+  sidebarStats?: OverlaySummaryItem[];
+}
+
 // ── 设置面板 ─────────────────────────────────────────────────────────────
 
 export type SettingsFieldType =
@@ -619,4 +786,127 @@ export interface ActionResult {
 /** `optionsFrom: "rpc:*"` 的返回值。 */
 export interface OptionsResult {
   options: SettingsFieldOption[];
+}
+
+// ─── 多端同步传输（replica，契约 §5.4）──────────────────────────────────────
+//
+// **replica 与 sync 是两个不同的扩展点，不要混。** sync 接的是外部系统（飞书、
+// Apple 日历），插件要理解对方的模型、产出 `ExternalItem`；replica 接的是**同一份
+// 数据的另一个副本**，插件**只搬运加密字节**，一个业务判断都不做。
+//
+// 两者语义在关键处正好相反：sync 遇到远端删除要保留本地，replica 必须真删。所以
+// manifest 里互斥，一个插件只能选一边。
+//
+// 五条硬约束（契约 §5.4.2，违反了宿主会判错或数据对不上）：
+//
+// 1. **`bytes` 是 base64。** 行分隔 JSON 放不了裸二进制。`maxObjectBytes` 说的是
+//    **解码后**的大小。
+// 2. **不得解释 `bytes`，也解释不了**——它是 XChaCha20-Poly1305 密文。日志里别打它。
+// 3. **`key` 由宿主生成**，不含业务语义。插件不得改写、加前缀或重排目录，否则换设备
+//    后对不上。要把数据放进自己的命名空间，用配置里的 database / 路径，别动 key。
+// 4. **`missing: true` 不是错误。** 对象被别的设备压实掉了是正常情况，返回 RPC 错误
+//    会白白触发退避与断路器。
+// 5. **`put` 必须幂等。** 同一个 key 重复写入同样的内容不算失败——网络重试会真的
+//    发生，而 journal 分片内容是不变的。
+
+/** `replica.put` 的一个待上传对象。 */
+export interface ReplicaPutObject {
+  key: string;
+  /** base64 编码的密文。 */
+  bytes: string;
+}
+
+export interface ReplicaPutParams {
+  profileId: string;
+  traceId?: string;
+  objects: ReplicaPutObject[];
+  config?: Record<string, unknown>;
+}
+
+export interface ReplicaPutResult {
+  /** 成功写入的 key。 */
+  written: string[];
+}
+
+export interface ReplicaGetParams {
+  profileId: string;
+  traceId?: string;
+  keys: string[];
+  config?: Record<string, unknown>;
+}
+
+/** 下载结果的一项。`missing: true` 时 `bytes` 省略，**这不是错误**。 */
+export interface ReplicaFetchedObject {
+  key: string;
+  bytes?: string;
+  missing?: boolean;
+}
+
+export interface ReplicaGetResult {
+  objects: ReplicaFetchedObject[];
+}
+
+export interface ReplicaListParams {
+  profileId: string;
+  traceId?: string;
+  prefix: string;
+  /** 上次返回的游标，增量列举。首次为空。 */
+  since?: string;
+  limit: number;
+  config?: Record<string, unknown>;
+}
+
+export interface ReplicaObjectMeta {
+  key: string;
+  /**
+   * 解码后字节数，**可省**。
+   *
+   * 宿主一处都不消费它（将来压实统计体积时才会用），而**绝不允许为了填上它去下载对象
+   * 内容**——CouchDB 插件早期在 `_all_docs` 上带了 `include_docs=true` 只为算这个数，
+   * 于是宿主每轮列举都把远端所有分片的密文整份下载一遍：功能完全正常，只是流量与历史
+   * 长度成正比（契约 §5.4.2）。拿不到就省略。
+   */
+  size?: number;
+}
+
+export interface ReplicaListResult {
+  objects: ReplicaObjectMeta[];
+  /** 下次 `list` 传回的游标。 */
+  cursor?: string;
+  hasMore?: boolean;
+}
+
+export interface ReplicaDeleteParams {
+  profileId: string;
+  traceId?: string;
+  keys: string[];
+  config?: Record<string, unknown>;
+}
+
+export interface ReplicaDeleteResult {
+  deleted: string[];
+}
+
+export interface ReplicaWatchParams {
+  profileId: string;
+  traceId?: string;
+  since?: string;
+  config?: Record<string, unknown>;
+}
+
+/**
+ * `replica.watch` 的应答。**必须立即返回**，不要在里面等第一条变更。
+ *
+ * 宿主是「串行请求-响应 + 超时杀进程」（契约 §4.5），挂在 watch 里等 60 秒的
+ * longpoll 会被当成超时杀掉然后无限重启。返回之后在自己的循环里等变更，用
+ * `replica.changed` 通知上报，并每 `heartbeatSeconds` 至少发一次 `replica.heartbeat`
+ * （没有变更时也要发）——宿主按 3 个心跳周期判活。
+ */
+export interface ReplicaWatchResult {
+  watching: boolean;
+  heartbeatSeconds?: number;
+}
+
+export interface ReplicaUnwatchResult {
+  watching: false;
 }

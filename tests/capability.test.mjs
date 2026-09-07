@@ -76,10 +76,27 @@ describe("scope 拼装", () => {
     }
   });
 
-  it("全勾时是三组的并集，不重复", () => {
+  it("全勾时是各组的并集，不重复", () => {
     const scopes = scopesFor(ALL_CAPABILITIES).split(" ");
     assert.equal(new Set(scopes).size, scopes.length, "有重复 scope");
-    assert.equal(scopes.length, 2 + 2 + 3 + 1);
+    // tasks 2 + calendar 2 + meetings 3 + attendance 2 + offline_access
+    assert.equal(scopes.length, 2 + 2 + 3 + 2 + 1);
+  });
+
+  it("只勾考勤时不含任务、日历、会议权限", () => {
+    // 考勤是这个插件里唯一「只读个人数据」的能力，勾它不该顺带交出任务读写
+    const scopes = scopesFor(["attendance"]).split(" ");
+    assert.ok(scopes.includes("attendance:task:readonly"));
+    // 考勤接口按 employee_id（飞书 user_id）查，那个值要从 authen/v1/user_info 取；
+    // 少了这个 scope 会拿到空串，表现是「一条考勤都没有」而不报错
+    assert.ok(scopes.includes("contact:user.id:readonly"));
+    for (const prefix of ["task:", "calendar:", "vc:"]) {
+      assert.equal(
+        scopes.some((scope) => scope.startsWith(prefix)),
+        false,
+        `不该含 ${prefix}`,
+      );
+    }
   });
 });
 

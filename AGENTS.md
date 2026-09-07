@@ -1,13 +1,14 @@
 # AGENTS.md — yinian-plugin-feishu
 
-[一念（Yinian）](https://github.com/VangelisHaha/nikou-agenda)的飞书插件：任务同步（双向）、日历与会议同步（pull-only）、通知渠道（出站）。基于[官方模板](https://github.com/VangelisHaha/yinian-plugin-template)，SDK 与 `doctor` 是从那里复制的。
+[一念（Yinian）](https://github.com/VangelisHaha/nikou-agenda)的飞书插件：任务同步（双向）、日历与会议同步（pull-only）、考勤叠加层（只读，画在日历上）、通知渠道（出站）。基于[官方模板](https://github.com/VangelisHaha/yinian-plugin-template)，SDK 与 `doctor` 是从那里复制的。
 
-## 三个扩展点的边界
+## 四个扩展点的边界
 
 | 扩展点 | 入口 | 配置在哪 | 不要做的事 |
 |---|---|---|---|
 | `sync.pull` / `sync.push`（task） | `handlers/sync.mts` | 实例级（`request.config`） | — |
 | `sync.pull`（event） | `handlers/syncEvent.mts` | 实例级（`request.config`） | 不要实现 push：event 是 pull-only，宿主不会调 |
+| `calendarOverlay.list` | `handlers/calendarOverlay.mts` | **插件级**（载荷里没有 `config`） | **不要在这里发网络请求**，只读缓存 |
 | `notify.send` | `handlers/notify.mts` | **插件级**（`plugin.init` 的 config） | 不要在这里判静默/订阅，那是宿主的事 |
 
 `sync.pull` 是**一个方法两种资源**，按 `request.resource` 分派。宿主按 manifest 的
@@ -17,6 +18,60 @@
 插件级 + 实例级），退回 `plugin.init` 那份。直接读 `context().config` 的话，
 实例设置怎么改都不生效——一个进程服务该插件下的所有实例，init 时给不出「哪一个实例」。
 唯一例外是 `notify.send`，它的载荷里没有 `config`（契约 §8.2），所以**通知配置必须放插件级**。
+
+## 考勤叠加层：三条不能违反的约束
+
+契约是一念仓库的 `docs/11-plugin-architecture.md` §8.4。实现在
+`handlers/calendarOverlay.mts`（渲染）+ `feishu/attendance.mts`（取数与判定）+
+`feishu/attendanceStore.mts`（缓存与后台刷新）。
+
+1. **`calendarOverlay.list` 里一行网络请求都不许有。** 它在 UI 路径上、超时只有 8 秒，
+   用户翻一页月视图就等着它。刷新跑在插件自己的 `setInterval` 里（15 分钟），写进
+   `dataDir/attendance-cache.json`，`list` 只读缓存并**同步返回**。
+2. **在收到第一次 `list` 之前不要去拉考勤。** 这个扩展点默认关闭，关着的时候宿主
+   **根本不会调它**（`services/calendar_overlay.rs` 那道闸门），所以「第一次被调到」
+   是唯一可靠的授权信号。缓存文件存在 = 用户此前启用过，`onInit` 可以据此续上后台
+   刷新；不存在就老实等。
+3. **`tone` 是语义档位，不是颜色；文案与格式化全归插件。** 宿主不认识「出勤」这个词，
+   所以它把 `locale` 下发给我们；反过来颜色、字体、单位一个都不许我们指定。角标上
+   **不许用 `alert`**（会和「今天」「高优先级」抢强调色，宿主收到也会降级）。
+
+### 考勤 API 的四个坑（全是真机撞出来的）
+
+- **`shift_id === "0"` 只表示当天没有排班，不代表没上班。** 周末加班打卡就是这个形态，
+  而此时 `check_in_result` 是 `NoNeedCheck`——只看它会把加班日判成休息日，而工时审计
+  恰恰要求加班日也有排期覆盖。判据是 `check_in_record_id` / `check_out_record_id`
+  有没有值。
+- **单次查询区间不能超过 30 天**（实测 `1220001: interval is larger than 30`）。
+  月视图一次要 42 个格子，所以 `splitSpan` 会分段拉再合并。不分段的表现是「翻到月视图
+  什么都没有」，而错误只在插件日志里。
+- **`check_time` 是秒级时间戳字符串**，与飞书任务那套毫秒不同（同一个飞书，两套单位，
+  见下面「时间」那一节）。当毫秒解析会把打卡时刻算到 1970 年。
+- **`dateFrom` 不能是未来**，飞书校验 `[企业考勤起始日, 明天]`，越界**直接报
+  `1220001`** 而不是返回空。月视图 42 格的后半段常常整段在未来，所以 `clampToPast`
+  会把上界夹到明天、整段在未来时一次请求都不发。配套还有一条：**分段查询要逐段容错**
+  ——早于企业考勤起始日的那段同样会被拒，而当月那段本来是好的，一段失败带走整轮的
+  表现是「翻到某个月一个角标都没有」。
+
+### `scheduled` 与 `absent` 必须分开
+
+飞书会返回**未来的排班**（明天是工作日，`shift_id` 非 0 而 `records` 为空）。把它当缺勤
+会在明天的格子里画一个「缺」，**用户会以为自己旷工**。今天同理：上午还没打卡不等于没来。
+
+所以 `classify` 收一个 `today`（按考勤时区算，不用本机时区——出差时「今天」该是公司时区
+的今天），有排班无打卡时按 `date < today` 分成 `absent` 与 `scheduled`，后者**不画角标、
+不计入任何统计**。
+
+另外 `employee_type` 用 `employee_id`，值是飞书的 `user_id`（形如 `adged4ed`），
+由 `authen/v1/user_info` 返回——**不让用户手填**，那个值在飞书界面上不好找，填错的表现是
+「一条考勤都没有」而不报错。取它需要 `contact:user.id:readonly`，所以那个 scope 与
+`attendance:task:readonly` 绑在同一项勾选里。
+
+### 汇总口径与角标区间不是一回事
+
+`from`/`to` 是看得见的全部格子（月视图 42 天，含上下月边缘），`summaryFrom`/`summaryTo`
+是汇总口径（当月首尾）。**拿 42 天算「本月出勤」会多算六七天，而界面上完全看不出错**——
+所以 `list` 里读了两次缓存，别图省事合成一次。
 
 ## 两种身份，别串用
 
@@ -140,6 +195,20 @@ PATCH 的请求体是 `{ task: {...}, update_fields: [...] }`。**漏了 `update
    日历显示在「待授权」；
 4. 重新授权后两项都进「已生效」；
 5. 没勾任务却配了一个同步实例 → 实例卡片上显示明确错误，而不是静默不同步。
+
+**考勤叠加层（0.5.0）**
+
+1. 勾上「飞书考勤」并重新授权 → 「查看授权状态」里它进「已生效」；
+2. 打开日历侧栏的「日历叠加」→ 里面出现「飞书考勤」这一项，**默认是关着的**；
+3. 打开它 → 月视图格子右上角出现角标，工作日「班」、周末加班「加」、请假「假」；
+4. 悬浮角标能看到打卡时间（`打卡 09:02–18:12`）；
+5. 侧栏「负载」卡里多出出勤 / 加班 / 请假几行，**数字是当月口径而不是那 42 格**
+   （拿 8 月 31 日到 10 月 11 日算会多几天，肉眼对不出来，用「出勤天数 = 本月工作日数」
+   自己核一遍）；
+6. 关掉那个开关 → 角标与那几行一起消失，**且插件日志里不再出现考勤刷新记录**
+   （关着时宿主根本不调，这是授权闸门而不是显示开关）；
+7. 把「普通工作日也打角标」关掉 → 只剩加班 / 请假 / 异常那几天；
+8. 断网翻月 → 角标照常显示（读的是缓存），日志里有一条刷新失败但界面无异常。
 
 **任务**
 

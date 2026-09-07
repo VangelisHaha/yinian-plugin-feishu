@@ -11,6 +11,8 @@ export {
   log,
   logger,
   progress,
+  replicaChanged,
+  replicaHeartbeat,
   setState,
   start,
   type Handler,

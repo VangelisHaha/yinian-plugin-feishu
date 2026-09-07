@@ -1,3 +1,4 @@
+import { handlers as agentTools } from "./handlers/tools.mjs";
 /**
  * 飞书任务插件入口。
  *
@@ -35,6 +36,7 @@ start({
   },
 
   handlers: {
+    ...agentTools,
     // sync.pull 按 request.resource 分派：task 走飞书任务，event 走飞书日历
     "sync.pull": sync.pull,
     "sync.push": sync.push,

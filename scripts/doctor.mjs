@@ -13,7 +13,16 @@
  * 退出码 0 全过，1 有错误。警告不影响退出码。
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  mkdtempSync,
+  rmSync,
+} from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { validateToolSchema } from "../dist/sdk/tools.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,7 +41,8 @@ const ROOT = resolveRoot();
 
 /** 与一念契约 §3.1 一致。 */
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
-const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const SEMVER_PATTERN =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const FIELD_KEY_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 const CUSTOM_METHOD_PATTERN = /^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)+$/;
 const RESERVED_PREFIXES = [
@@ -42,6 +52,7 @@ const RESERVED_PREFIXES = [
   "notify.",
   "hook.",
   "host.",
+  "tools.",
 ];
 
 const FIELD_TYPES = new Set([
@@ -100,12 +111,7 @@ const SYNC_FIELDS = new Set([
 const SYNC_MODES = new Set(["interval", "manual", "eventDriven"]);
 
 /** 日期标记类型，契约 §8.3。四个之外的取值宿主直接拒绝安装。 */
-const DAY_MARK_KINDS = new Set([
-  "lunar",
-  "solar_term",
-  "festival",
-  "holiday",
-]);
+const DAY_MARK_KINDS = new Set(["lunar", "solar_term", "festival", "holiday"]);
 
 /** 日历叠加层贴在哪，契约 §8.4。 */
 const OVERLAY_SURFACES = new Set(["dayBadge", "summary", "sidebarStat"]);
@@ -142,7 +148,10 @@ function checkManifest() {
 
   const where = "yinian-plugin.json";
   if (manifest.manifestVersion !== 1) {
-    fail(where, `manifestVersion 目前只支持 1，实际是 ${manifest.manifestVersion}`);
+    fail(
+      where,
+      `manifestVersion 目前只支持 1，实际是 ${manifest.manifestVersion}`,
+    );
   }
   for (const key of ["id", "name", "version", "author", "minHostVersion"]) {
     if (typeof manifest[key] !== "string" || !manifest[key]) {
@@ -188,7 +197,9 @@ function checkRuntime(manifest, where) {
     fail(where, "缺少 runtime.entry");
     return;
   }
-  const target = entry[process.platform === "darwin" ? "macos" : process.platform] ?? entry.default;
+  const target =
+    entry[process.platform === "darwin" ? "macos" : process.platform] ??
+    entry.default;
   if (typeof target !== "string" || !target) {
     fail(where, "runtime.entry 需要当前平台的键或 default");
     return;
@@ -198,10 +209,7 @@ function checkRuntime(manifest, where) {
     return;
   }
   if (!existsSync(join(ROOT, target))) {
-    fail(
-      where,
-      `runtime.entry 指向的 ${target} 不存在——先跑 npm run build`,
-    );
+    fail(where, `runtime.entry 指向的 ${target} 不存在——先跑 npm run build`);
   }
 }
 
@@ -232,6 +240,7 @@ function checkContributes(manifest, where) {
     "notificationChannel",
     "dayMarks",
     "calendarOverlay",
+    "agentTools",
     "hooks",
   ];
   const contributed = entryPoints.filter((key) => {
@@ -246,6 +255,12 @@ function checkContributes(manifest, where) {
     );
   }
 
+  if (
+    contributes.agentTools &&
+    (!["plugin", "integration"].includes(contributes.agentTools.scope) ||
+      Object.keys(contributes.agentTools).some((k) => k !== "scope"))
+  )
+    fail(where, "agentTools 必须声明 scope: plugin 或 integration");
   if (contributes.sync) {
     const sync = contributes.sync;
     const resources = Array.isArray(sync.resources) ? sync.resources : [];
@@ -262,7 +277,10 @@ function checkContributes(manifest, where) {
       resources.length > 0 && resources.every((item) => item === "event");
 
     const capabilities = sync.capabilities ?? {};
-    if (!Array.isArray(capabilities.actions) || capabilities.actions.length === 0) {
+    if (
+      !Array.isArray(capabilities.actions) ||
+      capabilities.actions.length === 0
+    ) {
       fail(where, "contributes.sync.capabilities.actions 不能为空");
     } else {
       for (const action of capabilities.actions) {
@@ -274,7 +292,9 @@ function checkContributes(manifest, where) {
         warn(where, "capabilities.actions 没有 list，宿主无法拉取，只能靠回写");
       }
       if (eventOnly) {
-        const extra = capabilities.actions.filter((action) => action !== "list");
+        const extra = capabilities.actions.filter(
+          (action) => action !== "list",
+        );
         if (extra.length > 0) {
           warn(
             where,
@@ -542,7 +562,9 @@ function collectRegisteredMethods() {
   if (!existsSync(entry)) return null;
   const source = readFileSync(entry, "utf8");
   const methods = new Set();
-  for (const match of source.matchAll(/"([a-zA-Z][a-zA-Z0-9_.]*)":\s*[a-zA-Z_$]/g)) {
+  for (const match of source.matchAll(
+    /"([a-zA-Z][a-zA-Z0-9_.]*)":\s*[a-zA-Z_$]/g,
+  )) {
     methods.add(match[1]);
   }
   return methods;
@@ -554,13 +576,18 @@ function checkSchemaFile(relativePath, registered) {
 
   const where = relativePath;
   if (schema.scope !== "plugin" && schema.scope !== "integration") {
-    fail(where, `scope 必须是 plugin 或 integration，实际是「${schema.scope}」`);
+    fail(
+      where,
+      `scope 必须是 plugin 或 integration，实际是「${schema.scope}」`,
+    );
   }
   if (!Array.isArray(schema.fields)) {
     fail(where, "fields 必须是数组");
     return;
   }
-  const expectedScope = relativePath.includes("integration") ? "integration" : "plugin";
+  const expectedScope = relativePath.includes("integration")
+    ? "integration"
+    : "plugin";
   if (schema.scope !== expectedScope) {
     warn(where, `文件名暗示 scope 应该是 ${expectedScope}`);
   }
@@ -618,7 +645,10 @@ function checkField(field, where, registered, siblingKeys, nested) {
 
     case "enum":
     case "multi-enum":
-      if (!Array.isArray(field.options) && typeof field.optionsFrom !== "string") {
+      if (
+        !Array.isArray(field.options) &&
+        typeof field.optionsFrom !== "string"
+      ) {
         fail(where, `${field.type} 字段 ${label} 需要 options 或 optionsFrom`);
       }
       if (typeof field.optionsFrom === "string") {
@@ -651,7 +681,9 @@ function checkCustomMethod(method, where, label, registered) {
     );
     return;
   }
-  const reserved = RESERVED_PREFIXES.find((prefix) => method.startsWith(prefix));
+  const reserved = RESERVED_PREFIXES.find((prefix) =>
+    method.startsWith(prefix),
+  );
   if (reserved) {
     fail(where, `${label} 的 rpc「${method}」用了宿主保留前缀 ${reserved}`);
     return;
@@ -706,19 +738,25 @@ function checkHandlersMatchContributes(manifest, registered) {
 
   // 反向：注册了却没声明，宿主永远不会调
   if (registered.has("sync.pull") && !contributes.sync) {
-    warn(where, "注册了 sync.pull 但 manifest 没声明 contributes.sync，不会被调用");
+    warn(
+      where,
+      "注册了 sync.pull 但 manifest 没声明 contributes.sync，不会被调用",
+    );
   }
-  if (registered.has("hook.dispatch") && (contributes.hooks ?? []).length === 0) {
+  if (
+    registered.has("hook.dispatch") &&
+    (contributes.hooks ?? []).length === 0
+  ) {
     warn(where, "注册了 hook.dispatch 但没订阅任何 topic，不会被调用");
   }
   if (registered.has("notify.send") && !contributes.notificationChannel) {
-    warn(
-      where,
-      "注册了 notify.send 但没声明 notificationChannel，不会被调用",
-    );
+    warn(where, "注册了 notify.send 但没声明 notificationChannel，不会被调用");
   }
   if (registered.has("dayMarks.list") && !contributes.dayMarks) {
-    warn(where, "注册了 dayMarks.list 但没声明 contributes.dayMarks，不会被调用");
+    warn(
+      where,
+      "注册了 dayMarks.list 但没声明 contributes.dayMarks，不会被调用",
+    );
   }
   if (registered.has("calendarOverlay.list") && !contributes.calendarOverlay) {
     warn(
@@ -754,7 +792,8 @@ function checkPermissionUsage(manifest) {
       what: "发起网络请求（fetch）",
     },
     {
-      pattern: /\b(?:https?|node:https?)\b.*\.request\s*\(|\brequire\(["']https?["']\)/,
+      pattern:
+        /\b(?:https?|node:https?)\b.*\.request\s*\(|\brequire\(["']https?["']\)/,
       declared: declaredNet,
       key: "net",
       what: "发起网络请求（http/https 模块）",
@@ -784,7 +823,10 @@ function checkPermissionUsage(manifest) {
   }
 
   // 反向：声明了却没用到，等于向用户多要了权限
-  if (declaredNet && !sources.some((file) => /\bfetch\s*\(|\.request\s*\(/.test(file.text))) {
+  if (
+    declaredNet &&
+    !sources.some((file) => /\bfetch\s*\(|\.request\s*\(/.test(file.text))
+  ) {
     warn(where, "声明了 net 权限但源码里没看到网络调用，考虑去掉");
   }
   if (
@@ -818,6 +860,88 @@ function readSourceFiles() {
   return files;
 }
 
+function checkTools(manifest) {
+  if (!manifest?.contributes?.agentTools) return;
+  const entry = manifest.runtime?.entry?.default;
+  if (!entry || !existsSync(join(ROOT, entry))) return;
+  const dataDir = mkdtempSync(join(tmpdir(), "yinian-tools-doctor-"));
+  try {
+    const frames = [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "plugin.init",
+        params: {
+          protocolVersion: 1,
+          hostVersion: "0.13.0",
+          pluginId: manifest.id,
+          integrationId: null,
+          apiBaseUrl: "",
+          apiToken: "",
+          dataDir,
+          locale: "zh-CN",
+          logLevel: "error",
+          devMode: true,
+          config: {},
+          state: {},
+        },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools.list",
+        params: { integrationId: "doctor-instance", config: {} },
+      },
+      { jsonrpc: "2.0", id: 3, method: "plugin.shutdown", params: {} },
+    ];
+    const run = spawnSync(process.execPath, [join(ROOT, entry)], {
+      input: frames.map((f) => JSON.stringify(f)).join("\n") + "\n",
+      encoding: "utf8",
+      timeout: 15000,
+      maxBuffer: 1024 * 1024,
+    });
+    const response = run.stdout
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .find((f) => f.id === 2);
+    if (!response?.result?.tools || response.error)
+      throw new Error("tools.list 未返回工具目录");
+    const tools = response.result.tools;
+    if (!Array.isArray(tools) || tools.length > 32)
+      throw new Error("工具目录必须为最多 32 项的数组");
+    const names = new Set();
+    for (const tool of tools) {
+      if (
+        !/^[A-Za-z0-9_]{1,64}$/.test(tool.name) ||
+        names.has(tool.name) ||
+        !tool.title?.trim() ||
+        !tool.description?.trim()
+      )
+        throw new Error("工具名称、说明或重复定义不合法");
+      names.add(tool.name);
+      if (
+        !["read", "write"].includes(tool.effect) ||
+        (tool.effect === "read" && tool.binding)
+      )
+        throw new Error("工具读写声明不合法");
+      if (tool.binding && !["task", "event"].includes(tool.binding))
+        throw new Error("工具绑定类型不合法");
+      if (
+        tool.binding &&
+        manifest.contributes.agentTools.scope !== "integration"
+      )
+        throw new Error("绑定工具需要 integration scope");
+      validateToolSchema(tool.inputSchema);
+      if (tool.outputSchema) validateToolSchema(tool.outputSchema);
+    }
+  } catch (e) {
+    fail("agentTools", e.message);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+}
+
 function main() {
   const manifest = checkManifest();
   const registered = collectRegisteredMethods();
@@ -829,6 +953,7 @@ function main() {
   }
   checkHandlersMatchContributes(manifest, registered);
   checkPermissionUsage(manifest);
+  checkTools(manifest);
 
   for (const message of warnings) console.warn(`[warn] ${message}`);
   for (const message of errors) console.error(`[error] ${message}`);

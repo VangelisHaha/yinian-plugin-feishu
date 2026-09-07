@@ -135,6 +135,8 @@ export const TIMEOUTS: Readonly<Record<string, number>> = Object.freeze({
   "plugin.init": 30_000,
   "config.validate": 30_000,
   "config.schema": 15_000,
+  "tools.list": 15_000,
+  "tools.call": 120_000,
   "sync.pull": 120_000,
   "sync.push": 120_000,
   "hook.dispatch": 30_000,
@@ -176,7 +178,8 @@ export const TIMEOUTS: Readonly<Record<string, number>> = Object.freeze({
  *
  * 形如 `feishu.testConnection`，且不得占用宿主保留的前缀。
  */
-export const CUSTOM_METHOD_PATTERN = /^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)+$/;
+export const CUSTOM_METHOD_PATTERN =
+  /^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)+$/;
 
 /**
  * 宿主保留的方法前缀，与宿主 `plugin/protocol.rs` 的 `RESERVED_PREFIXES` 一一对应。
@@ -191,6 +194,7 @@ export const RESERVED_METHOD_PREFIXES = [
   "notify.",
   "hook.",
   "host.",
+  "tools.",
   "dayMarks.",
   "calendarOverlay.",
   "replica.",

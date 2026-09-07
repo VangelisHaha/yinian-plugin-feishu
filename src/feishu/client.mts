@@ -57,7 +57,7 @@ export class FeishuClient {
   }
 
   #request<T>(
-    method: "GET" | "PATCH",
+    method: "GET" | "PATCH" | "POST",
     path: string,
     options: { query?: Record<string, string>; body?: unknown } = {},
   ): Promise<T> {
@@ -69,6 +69,38 @@ export class FeishuClient {
       ...(options.query ? { query: options.query } : {}),
       ...(options.body === undefined ? {} : { body: options.body }),
     });
+  }
+
+  /** 与官方 CLI shortcuts/task/shortcuts.go 对齐，client_token 防止重复创建。 */
+  async createTask(
+    item: { title: string; notes?: string; dueAt?: string },
+    operationId: string,
+  ): Promise<FeishuTask> {
+    const user = await this.#request<{ open_id?: string }>(
+      "GET",
+      "/open-apis/authen/v1/user_info",
+    );
+    if (!user.open_id)
+      throw new Error("无法取得当前授权用户，不能创建无负责人的任务");
+    const body: Record<string, unknown> = {
+      summary: item.title,
+      client_token: operationId,
+      members: [{ id: user.open_id, role: "assignee", type: "user" }],
+    };
+    if (item.notes) body.description = item.notes;
+    if (item.dueAt) {
+      const ms = Date.parse(item.dueAt);
+      if (!Number.isFinite(ms)) throw new Error("截止时间不合法");
+      body.due = { timestamp: String(ms), is_all_day: false };
+    }
+    const result = await this.#request<{ task: FeishuTask }>(
+      "POST",
+      "/open-apis/task/v2/tasks",
+      { query: { user_id_type: "open_id" }, body },
+    );
+    if (!result.task?.guid)
+      throw new Error("飞书未返回创建任务的身份，请核对远端结果");
+    return result.task;
   }
 
   /** 列「我的任务」的一页。`completed` 分开拉：接口不会在一次结果里混两种状态。 */
@@ -113,7 +145,10 @@ export class FeishuClient {
   }
 
   /** 标记完成。`completedAtMs` 传本地记录的真实完成时间，别用当前时间。 */
-  async complete(guid: string, completedAtMs: number): Promise<FeishuTask | null> {
+  async complete(
+    guid: string,
+    completedAtMs: number,
+  ): Promise<FeishuTask | null> {
     return this.#patch(guid, { completed_at: String(completedAtMs) }, [
       "completed_at",
     ]);

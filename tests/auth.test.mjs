@@ -95,7 +95,10 @@ describe("申请设备码", () => {
     assert.ok(device.expiresAt > Date.now());
 
     const [call] = calls;
-    assert.match(call.url, /accounts\.feishu\.cn\/oauth\/v1\/device_authorization/);
+    assert.match(
+      call.url,
+      /accounts\.feishu\.cn\/oauth\/v1\/device_authorization/,
+    );
     const basic = Buffer.from("cli_test:secret").toString("base64");
     assert.equal(call.init.headers.Authorization, `Basic ${basic}`);
     // 没有 offline_access 就拿不到 refresh_token，每 2 小时都要重新授权
@@ -111,7 +114,10 @@ describe("申请设备码", () => {
 
   it("凭据错误归类为配置问题", async () => {
     mockFetch([
-      { status: 400, body: { error: "invalid_client", error_description: "app not found" } },
+      {
+        status: 400,
+        body: { error: "invalid_client", error_description: "app not found" },
+      },
     ]);
     await assert.rejects(
       () => requestDeviceCode(CREDENTIALS, SCOPES),
@@ -154,7 +160,11 @@ describe("轮询换 token", () => {
       },
     ]);
 
-    const token = await pollDeviceToken(CREDENTIALS, pending, Date.now() + 5_000);
+    const token = await pollDeviceToken(
+      CREDENTIALS,
+      pending,
+      Date.now() + 5_000,
+    );
 
     assert.equal(token.accessToken, "at-1");
     assert.equal(token.refreshToken, "rt-1");
@@ -168,13 +178,19 @@ describe("轮询换 token", () => {
       { body: { access_token: "at-1", refresh_token: "rt-1" } },
     ]);
 
-    const token = await pollDeviceToken(CREDENTIALS, pending, Date.now() + 20_000);
+    const token = await pollDeviceToken(
+      CREDENTIALS,
+      pending,
+      Date.now() + 20_000,
+    );
     assert.equal(token.accessToken, "at-1");
     assert.equal(calls.length, 2, "收到 slow_down 要继续轮询");
   });
 
   it("用户拒绝时明确报出来", async () => {
-    mockFetch([{ body: { error: "access_denied", error_description: "用户拒绝" } }]);
+    mockFetch([
+      { body: { error: "access_denied", error_description: "用户拒绝" } },
+    ]);
     await assert.rejects(
       () => pollDeviceToken(CREDENTIALS, pending, Date.now() + 5_000),
       (error) => error instanceof AuthError && error.kind === "denied",
@@ -200,7 +216,11 @@ describe("轮询换 token", () => {
 
   it("没有 offline_access 时也能用，只是没有 refresh_token", async () => {
     mockFetch([{ body: { access_token: "at-1", expires_in: 7200 } }]);
-    const token = await pollDeviceToken(CREDENTIALS, pending, Date.now() + 5_000);
+    const token = await pollDeviceToken(
+      CREDENTIALS,
+      pending,
+      Date.now() + 5_000,
+    );
     assert.equal(token.refreshToken, "");
     assert.equal(
       token.refreshExpiresAt,
@@ -337,6 +357,42 @@ describe("API 错误映射", () => {
     return new FeishuClient(CREDENTIALS, dir);
   }
 
+  it("创建给当前用户，截止时间毫秒，重试使用稳定 client_token", async () => {
+    const api = client(tempDir());
+    const calls = mockFetch([
+      { body: { code: 0, data: { open_id: "user-one" } } },
+      {
+        body: {
+          code: 0,
+          data: { task: { guid: "task-one", summary: "中文任务" } },
+        },
+      },
+    ]);
+    const result = await api.createTask(
+      { title: "中文任务", notes: "说明", dueAt: "2026-09-08T09:00:00+08:00" },
+      "stable-operation",
+    );
+    assert.equal(result.guid, "task-one");
+    const body = JSON.parse(calls[1].init.body);
+    assert.equal(body.client_token, "stable-operation");
+    assert.deepEqual(body.members, [
+      { id: "user-one", role: "assignee", type: "user" },
+    ]);
+    assert.equal(
+      body.due.timestamp,
+      String(Date.parse("2026-09-08T09:00:00+08:00")),
+    );
+    assert.equal(body.description, "说明");
+  });
+  it("查询不到当前用户不能发送创建请求", async () => {
+    const api = client(tempDir());
+    const calls = mockFetch([{ body: { code: 0, data: {} } }]);
+    await assert.rejects(
+      () => api.createTask({ title: "测试" }, "stable-operation"),
+      /当前授权用户/,
+    );
+    assert.equal(calls.length, 1);
+  });
   it("token 失效报成需要重新授权", async () => {
     const dir = tempDir();
     const api = client(dir);
@@ -392,7 +448,9 @@ describe("API 错误映射", () => {
   it("回写必须带 update_fields", async () => {
     const dir = tempDir();
     const api = client(dir);
-    const calls = mockFetch([{ body: { code: 0, data: { task: { guid: "g1" } } } }]);
+    const calls = mockFetch([
+      { body: { code: 0, data: { task: { guid: "g1" } } } },
+    ]);
 
     await api.complete("g1", 1_786_674_600_000);
 
@@ -406,7 +464,9 @@ describe("API 错误映射", () => {
   it("重开用零值表示未完成", async () => {
     const dir = tempDir();
     const api = client(dir);
-    const calls = mockFetch([{ body: { code: 0, data: { task: { guid: "g1" } } } }]);
+    const calls = mockFetch([
+      { body: { code: 0, data: { task: { guid: "g1" } } } },
+    ]);
 
     await api.reopen("g1");
 

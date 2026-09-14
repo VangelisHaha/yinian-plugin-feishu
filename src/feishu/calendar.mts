@@ -8,7 +8,7 @@
  *
  * ## 为什么用 `instance_view` 而不是 `events.list`
  *
- * `instance_view` 返回的是**已经展开的重复日程实例**。一念一期不展开 RRULE
+ * `instance_view` 返回的是**已经展开的重复日程实例**。安时一期不展开 RRULE
  * occurrence（`docs/01-roadmap.md` 还挂着），拉原始 event 的话每周例会在日历上
  * 只会出现一次——用户看到的日历就是错的。代价是同一个 `event_id` 会带回多个实例，
  * 所以 `externalId` 必须自己拼上实例开始时间，见 `calendarMapping.mts`。

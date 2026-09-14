@@ -148,7 +148,7 @@ describe("整张卡片", () => {
     const button = card.body.elements[2].actions[0];
     assert.equal(button.multi_url.url, "yinian://open/task/t-1");
     assert.equal(button.multi_url.pc_url, "yinian://open/task/t-1");
-    // 移动端刻意留空：一念只有桌面端，跳一个打不开的 scheme 比没按钮更糟
+    // 移动端刻意留空：安时只有桌面端，跳一个打不开的 scheme 比没按钮更糟
     assert.equal(button.multi_url.android_url, undefined);
   });
 

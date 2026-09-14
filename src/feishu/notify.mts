@@ -22,7 +22,7 @@
  * ## 为什么发卡片而不是纯文本
  *
  * 宿主下发的 `notification.detail`（契约 §8.2）带着截止时间、优先级、标签、地点这些
- * 明细。纯文本只能把它们拼成一坨，卡片能排成网格并给一个「在一念中打开」的按钮。
+ * 明细。纯文本只能把它们拼成一坨，卡片能排成网格并给一个「在安时中打开」的按钮。
  * 卡片的构造在 `card.mts`，这里只负责送。
  *
  * ## 为什么配置在插件级
@@ -75,7 +75,7 @@ export function deliveryMode(config: Record<string, unknown>): DeliveryMode {
  * 所以那条路仍然是文本。明细拼成缩进的几行，比只有标题好读。
  */
 export function renderText(notification: Notification): string {
-  const lines = [`【一念】${notification.title}`];
+  const lines = [`【安时】${notification.title}`];
   const body = notification.body?.trim();
   if (body) lines.push(body);
   for (const field of notification.detail?.fields ?? []) {

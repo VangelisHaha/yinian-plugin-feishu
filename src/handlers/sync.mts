@@ -1,5 +1,5 @@
 /**
- * 同步：把飞书「我的任务」拉进一念，把一念里的完成/重开/改字段推回飞书。
+ * 同步：把飞书「我的任务」拉进安时，把安时里的完成/重开/改字段推回飞书。
  *
  * ## 一次 pull 做三件事
  *
@@ -219,7 +219,7 @@ export async function push(request: PushRequest): Promise<PushResult> {
 
   switch (request.action) {
     case "complete": {
-      // 用一念记录的真实完成时间，不用当前时间：补同步历史任务时，
+      // 用安时记录的真实完成时间，不用当前时间：补同步历史任务时，
       // 用当前时间会把它们的完成时间全改成今天
       const ms = parseMs(
         request.item.completedAt ? Date.parse(request.item.completedAt) : null,

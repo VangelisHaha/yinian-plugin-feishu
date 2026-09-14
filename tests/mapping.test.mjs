@@ -61,7 +61,7 @@ describe("时间映射", () => {
   });
 
   it("全天折成当地那一天结束", () => {
-    // 一念的 dueAt 是 deadline。全天任务的 deadline 是那天结束，不是那天开始——
+    // 安时的 dueAt 是 deadline。全天任务的 deadline 是那天结束，不是那天开始——
     // 映射成零点会让当天的任务一整天都显示为已逾期
     const iso = timeToIso(
       { timestamp: String(AUG_18_0230_UTC), is_all_day: true },

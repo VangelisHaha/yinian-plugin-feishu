@@ -1,5 +1,5 @@
 /**
- * 飞书日程实例 → 一念 ExternalEvent 的字段映射。
+ * 飞书日程实例 → 安时 ExternalEvent 的字段映射。
  *
  * 纯函数，全部有单测覆盖。时间是这里唯一容易出错的地方，而错了的表现是
  * 「会议出现在错误的一天/错误的一小时」，用户很难自己判断是哪一层的问题。
@@ -9,7 +9,7 @@
  * 1. **日历用秒级时间戳**，任务用毫秒级。同一个飞书里两套单位，`mapping.mts` 的
  *    `parseMs` 不能直接用在这里。
  * 2. **全天日程的 `end_time.date` 是右开的**：官方 CLI 展示给人看之前会先减 1 秒
- *    再取日期。一念契约要的也是右开区间，所以**原样传，不要加减一天**。
+ *    再取日期。安时契约要的也是右开区间，所以**原样传，不要加减一天**。
  * 3. `instance_view` 返回的是展开后的实例，同一个 `event_id` 会出现多次
  *    （每周例会的每一周）。`externalId` 必须带上实例开始时间，否则一周的会议
  *    会互相覆盖，日历上只剩一条。
@@ -65,7 +65,7 @@ function busyStatus(value: unknown): ExternalBusyStatus {
   return value === "free" ? "free" : "busy";
 }
 
-/** 飞书的 rsvp 取值是 `accept` / `decline`，一念契约要 `accepted` / `declined`。 */
+/** 飞书的 rsvp 取值是 `accept` / `decline`，安时契约要 `accepted` / `declined`。 */
 function responseStatus(value: unknown): ExternalResponseStatus {
   switch (value) {
     case "accept":

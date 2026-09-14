@@ -1,5 +1,5 @@
 /**
- * 飞书任务 ↔ 一念外部条目的字段映射。
+ * 飞书任务 ↔ 安时外部条目的字段映射。
  *
  * 这个文件是纯函数，全部有单测覆盖——时间映射是这个插件最容易出错的地方，
  * 而错了的表现是「任务出现在错误的一天」，用户很难自己判断是哪一层的问题。
@@ -15,7 +15,7 @@
  * （`nikou-screen` 上实测：按 UTC 取会偏一天）。所以这里用本机时区取出年月日，
  * 再折成当地 23:59:59.999。
  *
- * 为什么是当天结束而不是零点：一念的 `dueAt` 语义是 deadline（最晚什么时候完成），
+ * 为什么是当天结束而不是零点：安时的 `dueAt` 语义是 deadline（最晚什么时候完成），
  * 一个全天任务的 deadline 是那天结束，不是那天开始。映射成零点会让当天的任务
  * 一整天都显示为已逾期。
  */
@@ -103,7 +103,7 @@ function zoneOffsetMs(utcMs: number, timeZone?: string): number {
   return asIfUtc - utcMs;
 }
 
-/** 把飞书的时间对象折成一念要的 RFC3339。 */
+/** 把飞书的时间对象折成安时要的 RFC3339。 */
 export function timeToIso(
   time: FeishuTime | undefined,
   timeZone?: string,
@@ -119,7 +119,7 @@ function remoteData(task: FeishuTask): Record<string, unknown> {
 }
 
 /**
- * 一条飞书任务 → 一念外部条目。
+ * 一条飞书任务 → 安时外部条目。
  *
  * `status` 由调用方给：列表接口是按 `completed` 分两次拉的，任务在哪一批里就决定
  * 了它的状态，任务对象本身没有状态字段。
@@ -146,7 +146,7 @@ export function toExternalItem(
   if (dueAt) item.dueAt = dueAt;
 
   // 只有真的知道完成时间才传。传当前时间会让历史任务全堆在同一秒，
-  // 一念的「今日完成」会瞬间多出一堆（nikou-screen 踩过这个坑）
+  // 安时的「今日完成」会瞬间多出一堆（nikou-screen 踩过这个坑）
   if (status === "done" && completedMs !== null) {
     item.completedAt = new Date(completedMs).toISOString();
   }
@@ -163,7 +163,7 @@ export function toExternalItem(
 }
 
 /**
- * 一念的字段变更 → 飞书的 PATCH 载荷。
+ * 安时的字段变更 → 飞书的 PATCH 载荷。
  *
  * 返回 `null` 表示没有飞书能接受的改动，调用方应当跳过这次回写而不是发空请求。
  */
@@ -189,7 +189,7 @@ export function toUpdatePayload(
         const ms = item.dueAt ? Date.parse(item.dueAt) : Number.NaN;
         fields["due"] = Number.isFinite(ms)
           ? { timestamp: String(ms), is_all_day: false }
-          : // 一念清空了截止时间 → 飞书用零值表示「无」
+          : // 安时清空了截止时间 → 飞书用零值表示「无」
             { timestamp: "0", is_all_day: false };
         updateFields.push("due");
         break;
@@ -208,7 +208,7 @@ export function toUpdatePayload(
  * 需要补详情的条目。
  *
  * 列表接口不给 `start` 与 `completed_at`：
- * - 已完成的缺真实完成时间，不补的话一念只能显示「不知道什么时候完成的」；
+ * - 已完成的缺真实完成时间，不补的话安时只能显示「不知道什么时候完成的」；
  * - 未完成的缺开始时间，不补的话跨天任务在时间轴上只剩截止那一天。
  */
 export function needsDetail(item: ExternalItem): boolean {
@@ -234,8 +234,8 @@ export function applyDetail(
   const dueAt = timeToIso(detail.due, timeZone);
   if (dueAt) merged.dueAt = dueAt;
 
-  // 一念的 Task 只有 due_at（deadline），没有「开始时间」字段——那属于排期块，
-  // 由用户在一念里自己安排。所以 start 只用来算估时，不覆盖 dueAt。
+  // 安时的 Task 只有 due_at（deadline），没有「开始时间」字段——那属于排期块，
+  // 由用户在安时里自己安排。所以 start 只用来算估时，不覆盖 dueAt。
   const startMs = parseMs(detail.start?.timestamp);
   const dueMs = parseMs(detail.due?.timestamp);
   if (startMs !== null && dueMs !== null && dueMs > startMs) {

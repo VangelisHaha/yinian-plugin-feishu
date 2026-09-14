@@ -4,7 +4,7 @@
  * ## 一套骨架，三种形态
  *
  * 任务、排期块、日程在卡片上**不是三种布局**，是同一套骨架填不同内容：
- * 彩色标题栏（事项标题 + 一句话说明什么时候）→ 明细网格 → 「在一念中打开」。
+ * 彩色标题栏（事项标题 + 一句话说明什么时候）→ 明细网格 → 「在安时中打开」。
  * 分成三套模板的话，「哪个字段放哪」「空值怎么处理」这些规则要写三遍，
  * 而它们本来只该有一份。类型差异只体现在两处：标题栏颜色与副标题措辞。
  *
@@ -12,7 +12,7 @@
  *
  * `notification.detail`（契约 §8.2）里的 `fields` 已经是格式化好的字符串，
  * **这里不解析、不换算、不判断全天与跨天**。宿主已经在四个视图和 AI 清单里处理过
- * 那些边界，插件再算一遍必然会分叉，而分叉的表现是飞书卡片上的时间和一念里
+ * 那些边界，插件再算一遍必然会分叉，而分叉的表现是飞书卡片上的时间和安时里
  * 对不上——用户没有任何办法知道哪个是对的。
  *
  * ## 排版规则
@@ -24,7 +24,7 @@
  *
  * manifest 里 `supportsActions: false`，所以宿主不会下发 `actions`，卡片上也就没有
  * 「完成」「推迟」。飞书卡片的交互按钮要回调一个公网地址，插件跑在用户本机、
- * 收不到——声明支持等于给用户一排点不动的按钮。唯一的按钮是打开一念，
+ * 收不到——声明支持等于给用户一排点不动的按钮。唯一的按钮是打开安时，
  * 那是个链接，不需要回调。
  */
 
@@ -163,9 +163,9 @@ export function detailElements(detail: NotificationDetail): CardElement[] {
 }
 
 /**
- * 「在一念中打开」按钮。
+ * 「在安时中打开」按钮。
  *
- * 移动端 url 刻意留空：一念目前只有桌面端，让手机上点了跳一个打不开的 scheme
+ * 移动端 url 刻意留空：安时目前只有桌面端，让手机上点了跳一个打不开的 scheme
  * 比没有按钮更糟。飞书会回退到 `url`，所以 `pc_url` 与 `url` 都填。
  */
 function openButton(deepLink: string): CardElement {
@@ -175,7 +175,7 @@ function openButton(deepLink: string): CardElement {
     actions: [
       {
         tag: "button",
-        text: { tag: "plain_text", content: "在一念中打开" },
+        text: { tag: "plain_text", content: "在安时中打开" },
         type: "default",
         size: "small",
         multi_url: { url: deepLink, pc_url: deepLink },

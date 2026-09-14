@@ -16,7 +16,7 @@ export const tools: ToolDefinition[] = [
     name: "create_task",
     title: "创建飞书任务",
     description:
-      "给当前授权用户创建任务，同时在一念保存并绑定这条任务。标题、说明、截止时间会写入飞书；其他本地字段保留在一念。",
+      "给当前授权用户创建任务，同时在安时保存并绑定这条任务。标题、说明、截止时间会写入飞书；其他本地字段保留在安时。",
     effect: "write",
     idempotent: true,
     binding: "task",

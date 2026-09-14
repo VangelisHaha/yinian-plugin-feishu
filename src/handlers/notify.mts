@@ -7,7 +7,7 @@
  *
  * `supportsActions` 声明的是 `false`，所以不会收到 `actions`。飞书卡片的交互按钮要
  * 回调公网地址，插件收不到——声明 true 就是给用户一排点不动的按钮。卡片上唯一的
- * 按钮是「在一念中打开」，那是个链接（deep link），不需要回调。
+ * 按钮是「在安时中打开」，那是个链接（deep link），不需要回调。
  *
  * ## 通知不需要用户授权
  *
@@ -182,10 +182,10 @@ export async function testNotification(params: {
     // 带上时间戳，连点两次要能连收两条——固定 id 会被幂等挡掉，看起来像没生效
     id: `test@${Date.now()}`,
     kind: "schedule_start",
-    title: "一念测试通知 · 示例排期",
+    title: "安时测试通知 · 示例排期",
     body: "这是一条示例，真实提醒长这样",
     detail: {
-      subject: "一念测试通知",
+      subject: "安时测试通知",
       label: "示例排期",
       priority: "high",
       overdue: false,
@@ -195,7 +195,7 @@ export async function testNotification(params: {
         { label: "标签", value: "示例" },
         {
           label: "说明",
-          value: "收到这条说明飞书通知渠道通了。真实提醒会多一个「在一念中打开」按钮。",
+          value: "收到这条说明飞书通知渠道通了。真实提醒会多一个「在安时中打开」按钮。",
         },
       ],
     },

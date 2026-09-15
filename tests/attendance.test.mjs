@@ -104,14 +104,84 @@ describe("逐日判定", () => {
     assert.equal(day.kind, "rest");
   });
 
-  it("请假优先于出勤", () => {
-    // 半天请假半天上班时两边都成立，但「今天请了假」更值得在日历上看到，
-    // 而且工时要按请假那半天补
+  it("上下班两次打卡各自有结论", () => {
+    // 环形角标要把两段分开画，而 `issues: ["lack"]` 说不出缺的是哪一次
+    const day = classify(workday({ check_out_result: "Lack" }), OFFSET);
+    assert.equal(day.punchIn, "normal");
+    assert.equal(day.punchOut, "lack");
+  });
+
+  it("无需打卡不等于该打没打", () => {
+    // 加班日两侧都是 NoNeedCheck，当成缺卡会让整圈环变红
     const day = classify(
+      {
+        day: 20260905,
+        shift_id: "0",
+        records: [
+          {
+            check_in_record_id: "9",
+            check_in_result: "NoNeedCheck",
+            check_out_result: "NoNeedCheck",
+            check_in_record: { check_time: IN_0902 },
+          },
+        ],
+      },
+      OFFSET,
+    );
+    assert.equal(day.punchIn, undefined);
+    assert.equal(day.punchOut, undefined);
+  });
+
+  it("一天多段班次取最差的那次结论", () => {
+    // 取第一条会让「上午正常、下午那段缺卡」显示成正常
+    const day = classify(
+      {
+        day: 20260901,
+        shift_id: SHIFT,
+        records: [
+          {
+            check_in_record_id: "1",
+            check_in_result: "Normal",
+            check_out_result: "Normal",
+          },
+          {
+            check_in_record_id: "2",
+            check_in_result: "Normal",
+            check_out_result: "Lack",
+          },
+        ],
+      },
+      OFFSET,
+    );
+    assert.equal(day.punchOut, "lack");
+  });
+
+  it("请假优先于出勤，并读出是哪半天", () => {
+    // 半天请假半天上班时两边都成立，但「今天请了假」更值得在日历上看到，
+    // 而且工时要按请假那半天补。
+    // 飞书的 supplement 上下两侧是分开的，半天假天然能读出来——上一版只判
+    // 「有没有请假」，于是「上午假下午上班」和「全天假」在日历上长得一模一样
+    const morning = classify(
       workday({ check_in_result_supplement: "Leave" }),
       OFFSET,
     );
-    assert.equal(day.kind, "leave");
+    assert.equal(morning.kind, "leave");
+    assert.equal(morning.leavePeriod, "am");
+
+    const afternoon = classify(
+      workday({ check_out_result_supplement: "Leave" }),
+      OFFSET,
+    );
+    assert.equal(afternoon.leavePeriod, "pm");
+
+    const allDay = classify(
+      workday({
+        check_in_result_supplement: "Leave",
+        check_out_result_supplement: "Leave",
+      }),
+      OFFSET,
+    );
+    assert.equal(allDay.leavePeriod, "full");
   });
 
   it("请假日不标异常", () => {
@@ -264,80 +334,133 @@ describe("未来日期夹取", () => {
 });
 
 describe("角标", () => {
-  const day = (kind, extra = {}) => ({ date: "2026-09-05", kind, ...extra });
+  const TODAY = "2026-09-05";
+  const day = (kind, extra = {}) => ({ date: TODAY, kind, ...extra });
+  // 绝大多数用例的那一天都不是今天，免得「今天才画 scheduled」那条规则渗进来
+  const badgeOf = (input, copy = ZH, showWorkdays = true) =>
+    toBadge(input, copy, showWorkdays, "2026-09-30");
+
+  it("一律画成环形", () => {
+    // 「班」和「加」用文字小方块时在格子里长得几乎一样，而「上午打了卡下午忘打」
+    // 只能靠悬浮看。环把上班卡 / 下班卡 / 这天的性质分成三个位置
+    const badge = badgeOf(day("worked", { punchIn: "normal", punchOut: "normal" }));
+    assert.equal(badge.shape, "ring");
+    assert.deepEqual(badge.arcs, { leading: "done", trailing: "done" });
+  });
 
   it("纯休息日永远不画", () => {
     // 一个月八九个周末各印一个「休」，把最值钱的位置占满而没有任何信息量——
     // 日历本来就知道周六周日是哪几天
-    assert.equal(toBadge(day("rest"), ZH, true), null);
-    assert.equal(toBadge(day("rest"), ZH, false), null);
+    assert.equal(badgeOf(day("rest")), null);
+    assert.equal(badgeOf(day("rest"), ZH, false), null);
   });
 
-  it("那天还没过完时不画", () => {
-    // 画「班」是撒谎（还没打卡），画「缺」更糟（看起来像旷工）
-    assert.equal(toBadge(day("scheduled"), ZH, true), null);
-    assert.equal(toBadge(day("scheduled"), ZH, false), null);
+  it("有排班但还没过完的日子只画今天", () => {
+    // 今天那一格恰恰最值得看（上班卡绿了、下班卡还灰着）；未来一整月的空环没有
+    // 信息量——哪些天上班日历自己就知道
+    assert.equal(badgeOf(day("scheduled")), null);
+    const today = toBadge(day("scheduled"), ZH, true, TODAY);
+    assert.equal(today.label, "班");
+    assert.deepEqual(today.arcs, { leading: "idle", trailing: "idle" });
   });
 
   it("加班用「加」并强调", () => {
-    const badge = toBadge(day("overtime", { checkIn: "10:00" }), ZH, true);
+    const badge = badgeOf(day("overtime", { checkIn: "10:00" }));
     assert.equal(badge.label, "加");
     assert.equal(badge.tone, "strong");
     assert.match(badge.detail, /休息日加班/);
     assert.match(badge.detail, /10:00/);
   });
 
-  it("请假用「假」并弱化", () => {
-    const badge = toBadge(day("leave"), ZH, true);
-    assert.equal(badge.label, "假");
-    assert.equal(badge.tone, "mute");
+  it("全天请假两段都是 alt，半天假只有一段", () => {
+    const full = badgeOf(day("leave", { leavePeriod: "full" }));
+    assert.equal(full.label, "假");
+    assert.equal(full.tone, "mute");
+    assert.deepEqual(full.arcs, { leading: "alt", trailing: "alt" });
+
+    // 半天假中间那个字仍然是「班」：那天确实来上班了，只有一半是假
+    const morning = badgeOf(
+      day("leave", { leavePeriod: "am", punchOut: "normal" }),
+    );
+    assert.equal(morning.label, "班");
+    assert.deepEqual(morning.arcs, { leading: "alt", trailing: "done" });
+    assert.match(morning.detail, /上午请假/);
+
+    const afternoon = badgeOf(
+      day("leave", { leavePeriod: "pm", punchIn: "late" }),
+    );
+    assert.deepEqual(afternoon.arcs, { leading: "warn", trailing: "alt" });
+    assert.match(afternoon.detail, /下午请假/);
   });
 
   it("工作日出勤用「班」，可以关掉", () => {
     const attended = day("worked", { checkIn: "09:02", checkOut: "18:12" });
-    const on = toBadge(attended, ZH, true);
+    const on = badgeOf(attended);
     assert.equal(on.label, "班");
     assert.equal(on.tone, undefined, "常态不该强调");
     assert.match(on.detail, /09:02–18:12/);
     // 关掉之后只剩非常态的日子
-    assert.equal(toBadge(attended, ZH, false), null);
+    assert.equal(badgeOf(attended, ZH, false), null);
+  });
+
+  it("上下班两段各自独立着色", () => {
+    // 这是环形存在的理由：一天里最常见的异常是「只缺了一次卡」
+    const badge = badgeOf(
+      day("worked", { punchIn: "normal", punchOut: "lack", issues: ["lack"] }),
+    );
+    assert.deepEqual(badge.arcs, { leading: "done", trailing: "miss" });
+    assert.equal(badge.label, "班", "状态由弧说，字只说这天的性质");
   });
 
   it("有异常的工作日即使关了工作日角标也要画", () => {
     // 缺卡是需要处理的事，不该被「不看常态」的开关一起藏掉
-    const badge = toBadge(day("worked", { issues: ["lack"] }), ZH, false);
-    assert.equal(badge.label, "异");
+    const badge = badgeOf(
+      day("worked", { issues: ["lack"], punchOut: "lack" }),
+      ZH,
+      false,
+    );
     assert.equal(badge.tone, "strong");
+    assert.equal(badge.arcs.trailing, "miss");
     assert.match(badge.detail, /缺卡/);
+  });
+
+  it("认不出的打卡结论当「还没有结论」而不是缺卡", () => {
+    // 飞书加一个枚举不该让日历上冒出一片红环
+    const badge = badgeOf(day("worked", { punchIn: "normal" }));
+    assert.equal(badge.arcs.trailing, "idle");
   });
 
   it("角标永远不用 alert 档", () => {
     // 契约 §8.4：角标就在格子里，强调色会和「今天」「高优先级」抢注意力，
     // 宿主收到也会降级
     for (const kind of ["worked", "overtime", "leave", "absent"]) {
-      const badge = toBadge(day(kind, { issues: ["lack"] }), ZH, true);
+      const badge = badgeOf(day(kind, { issues: ["lack"] }));
       assert.notEqual(badge?.tone, "alert");
     }
   });
 
-  it("角标文字不超过 2 字", () => {
-    // 那一行还有日号、农历标签、休班角标，宿主 4 字符截断
+  it("环中间的文字不超过 2 字", () => {
+    // 环内径只有 10px 出头，宿主截到 2 字符
     for (const kind of ["worked", "overtime", "leave", "absent"]) {
-      const badge = toBadge(day(kind), ZH, true);
+      const badge = badgeOf(day(kind));
       assert.ok([...badge.label].length <= 2, `${kind}: ${badge.label}`);
+      for (const copy of [ZH, EN]) {
+        const localized = badgeOf(day(kind), copy);
+        assert.ok([...localized.label].length <= 2, localized.label);
+      }
     }
   });
 
   it("每条角标都带 detail", () => {
-    // 角标只有一两个字，detail 是它的唯一解释来源
+    // 环里只有一个字，detail 是它的唯一解释来源
     for (const kind of ["worked", "overtime", "leave", "absent"]) {
-      assert.ok(toBadge(day(kind), ZH, true).detail);
+      assert.ok(badgeOf(day(kind)).detail);
     }
   });
 
   it("英文界面出英文", () => {
     // 文案 100% 归插件，宿主不认识「出勤」也就无从翻译
-    const badge = toBadge(day("overtime"), EN, true);
+    const badge = badgeOf(day("overtime"), EN);
     assert.equal(badge.label, "OT");
     assert.match(badge.detail, /Overtime/);
   });

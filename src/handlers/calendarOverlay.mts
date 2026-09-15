@@ -3,7 +3,8 @@
  *
  * 两个落点（manifest 里声明的就是这两个 surface）：
  *
- * - **格子右上角的角标**：「班」出勤、「加」加班、「假」请假、「缺」打卡异常
+ * - **格子右上角的环形角标**：左半环上班卡、右半环下班卡（绿正常 / 琥珀迟到早退 /
+ *   红缺卡 / 灰还没有结论 / 紫请假），中间一个字说这天的性质：「班」「加」「假」
  * - **日历侧栏「负载」卡里的几行**：出勤 / 加班 / 请假 / 异常的天数
  *
  * 刻意**不占视图右上角那条汇总**（`summary`）：契约 §8.4 说同一个指标不要两处都给，
@@ -24,14 +25,19 @@
 
 import { context, logger } from "../sdk/index.mjs";
 import type {
+  BadgeArc,
   CalendarOverlayListRequest,
   CalendarOverlayListResult,
   DayBadge,
   OverlaySummaryItem,
   OverlayTone,
 } from "../sdk/index.mjs";
-import type { AttendanceDay, AttendanceKind } from "../feishu/attendance.mjs";
-import { isStrictDateKey } from "../feishu/attendance.mjs";
+import type { AttendanceDay, PunchStatus } from "../feishu/attendance.mjs";
+import {
+  isStrictDateKey,
+  parseUtcOffset,
+  todayKey,
+} from "../feishu/attendance.mjs";
 import {
   isWarmingUp,
   noteInterest,
@@ -52,12 +58,19 @@ const PROVIDER_ID = "attendance";
  * **不报错**（契约 §8.4 明确要求）。
  */
 interface Copy {
-  badge: Record<Exclude<AttendanceKind, "rest" | "scheduled">, string>;
-  issueBadge: string;
+  /**
+   * 环中间那个字。**只有三种**——状态由弧的颜色说，不再有「缺」「异」这类字。
+   *
+   * 环内径只放得下 1 个汉字或 2 个拉丁字符，所以英文用缩写。
+   */
+  badge: { worked: string; overtime: string; leave: string };
   detail: {
     worked: string;
     overtime: string;
     leave: string;
+    leaveAm: string;
+    leavePm: string;
+    scheduled: string;
     absent: string;
     punch: (checkIn: string, checkOut: string) => string;
     punchIn: (checkIn: string) => string;
@@ -88,12 +101,14 @@ interface Copy {
 type BlockedReason = "credentials" | "capability";
 
 const ZH: Copy = {
-  badge: { worked: "班", overtime: "加", leave: "假", absent: "缺" },
-  issueBadge: "异",
+  badge: { worked: "班", overtime: "加", leave: "假" },
   detail: {
     worked: "出勤",
     overtime: "休息日加班",
-    leave: "请假",
+    leave: "全天请假",
+    leaveAm: "上午请假",
+    leavePm: "下午请假",
+    scheduled: "今天有排班",
     absent: "有排班但没有打卡记录",
     punch: (checkIn, checkOut) => `打卡 ${checkIn}–${checkOut}`,
     punchIn: (checkIn) => `打卡 ${checkIn}，尚未下班`,
@@ -126,12 +141,14 @@ const ZH: Copy = {
 };
 
 const EN: Copy = {
-  badge: { worked: "W", overtime: "OT", leave: "LV", absent: "!" },
-  issueBadge: "!",
+  badge: { worked: "W", overtime: "OT", leave: "LV" },
   detail: {
     worked: "Attended",
     overtime: "Overtime on a day off",
-    leave: "On leave",
+    leave: "On leave all day",
+    leaveAm: "On leave in the morning",
+    leavePm: "On leave in the afternoon",
+    scheduled: "Scheduled for today",
     absent: "Scheduled but no punch record",
     punch: (checkIn, checkOut) => `Punched ${checkIn}–${checkOut}`,
     punchIn: (checkIn) => `Punched in at ${checkIn}, no punch out yet`,
@@ -219,8 +236,10 @@ export async function list(
   );
 
   const showWorkdays = showWorkdayBadges(config);
+  // 「今天」按公司时区算而不是本机时区：出差到别的时区时，今天那一格该跟着公司走
+  const today = todayKey(parseUtcOffset(source.utcOffset));
   const badges = badgeDays
-    .map((day) => toBadge(day, copy, showWorkdays))
+    .map((day) => toBadge(day, copy, showWorkdays, today))
     .filter((badge): badge is DayBadge => badge !== null);
 
   return {
@@ -232,43 +251,103 @@ export async function list(
 /**
  * 一天 → 角标。返回 `null` 表示这天不画。
  *
+ * 画出来的是**环形**（契约 `shape: "ring"`）：左半环是上班卡、右半环是下班卡，中间一个
+ * 字说这天是什么性质（班 / 加 / 假）。上一版是一个文字小方块，「班」和「加」在格子里
+ * 长得几乎一样，而「上午打了卡、下午忘打」只能靠悬浮才看得出来——那三件事恰好是一天
+ * 里最该被一眼看到的，环把它们分成三个位置。
+ *
  * **纯休息日永远不画**：一个月八九个周末各印一个「休」，把格子右上角那个位置占满，
  * 而它没有任何信息量——日历本来就知道周六周日是哪几天。
  *
- * 普通工作日出勤（`worked`）默认画「班」，但可以在设置里关掉：它是常态，一个月二十来
- * 个「班」也接近噪声。想看的人要的是「这个月我到底出勤了哪些天」，所以默认开着。
+ * 普通工作日出勤（`worked`）默认画，但可以在设置里关掉：它是常态，一个月二十来个环也
+ * 接近噪声。想看的人要的是「这个月我到底出勤了哪些天」，所以默认开着。
+ *
+ * `scheduled`（有排班、那天还没过完）**只画今天**：今天那一格恰恰是最值得看的
+ * （上班卡绿了、下班卡还灰着），而未来一整月的空环没有任何信息量——哪些天上班日历自己
+ * 就知道。这一条替换了上一版「`scheduled` 一律不画」的规则：那时画出来是撒谎（一个
+ * 「班」字说不出「还没打卡」），环形有 `idle` 这一档，说得出来。
  */
 export function toBadge(
   day: AttendanceDay,
   copy: Copy,
   showWorkdays: boolean,
+  today: string,
 ): DayBadge | null {
   if (day.kind === "rest") return null;
-  // 那天还没过完：画「班」是撒谎（还没打卡），画「缺」更糟（看起来像旷工）
-  if (day.kind === "scheduled") return null;
-  if (day.kind === "worked" && !showWorkdays && !hasIssues(day)) return null;
+  if (day.kind === "scheduled" && day.date !== today) return null;
+  if (
+    (day.kind === "worked" || day.kind === "scheduled") &&
+    !showWorkdays &&
+    !hasIssues(day)
+  ) {
+    return null;
+  }
 
-  const label = badgeLabel(day, copy);
+  const badge: DayBadge = {
+    date: day.date,
+    label: ringLabel(day, copy),
+    shape: "ring",
+    arcs: {
+      leading: leadingArc(day),
+      trailing: trailingArc(day),
+    },
+  };
   const tone = badgeTone(day);
-  const detail = badgeDetail(day, copy);
-
-  const badge: DayBadge = { date: day.date, label };
   if (tone !== "neutral") badge.tone = tone;
-  // 角标只有一两个字，detail 是它的唯一解释来源，一律给
-  badge.detail = detail;
+  // 环里只有一个字，detail 是它的唯一解释来源，一律给
+  badge.detail = badgeDetail(day, copy);
   return badge;
+}
+
+/**
+ * 中间那个字。**只有三种**：全天假「假」、休息日加班「加」、其余「班」。
+ *
+ * 上一版还有「缺」和「异」两种，现在由弧的颜色说：缺卡是红弧、迟到是琥珀弧。让字去说
+ * 状态、弧去说状态，是把同一件事画两遍，而两处一旦不一致（比如「班」配一圈红弧）
+ * 用户只会觉得其中一个是错的。
+ */
+function ringLabel(day: AttendanceDay, copy: Copy): string {
+  if (day.leavePeriod === "full") return copy.badge.leave;
+  if (day.kind === "overtime") return copy.badge.overtime;
+  return copy.badge.worked;
+}
+
+/** 上班那半环。请假盖过打卡结论——请假是有交代的，没打卡是没有交代。 */
+function leadingArc(day: AttendanceDay): BadgeArc {
+  if (day.leavePeriod === "am" || day.leavePeriod === "full") return "alt";
+  return arcOf(day.punchIn);
+}
+
+/** 下班那半环。 */
+function trailingArc(day: AttendanceDay): BadgeArc {
+  if (day.leavePeriod === "pm" || day.leavePeriod === "full") return "alt";
+  return arcOf(day.punchOut);
+}
+
+/**
+ * 一次打卡的结论 → 一段弧的语义档位。
+ *
+ * `absent`（有排班、已经过去、一次卡都没打）走的也是这里：飞书那天两侧都给 `Lack`，
+ * 于是整圈是红的——比一个「缺」字更快看出「这天两次卡都没有」。
+ */
+function arcOf(status: PunchStatus | undefined): BadgeArc {
+  switch (status) {
+    case "normal":
+      return "done";
+    case "late":
+    case "early":
+      return "warn";
+    case "lack":
+      return "miss";
+    // `todo`（该打还没打）与「不需要打卡」都是「还没有结论」：加班日无需打卡，
+    // 画成灰环比画成缺卡诚实
+    default:
+      return "idle";
+  }
 }
 
 function hasIssues(day: AttendanceDay): boolean {
   return (day.issues ?? []).length > 0;
-}
-
-function badgeLabel(day: AttendanceDay, copy: Copy): string {
-  // 有排班却缺卡这类要用「异」压过「班」：它是需要处理的事，而「班」只是常态
-  if (day.kind === "worked" && hasIssues(day)) return copy.issueBadge;
-  // 上游已挡掉这两类，兜底免得 TS 上出现 undefined
-  if (day.kind === "rest" || day.kind === "scheduled") return copy.badge.worked;
-  return copy.badge[day.kind];
 }
 
 /**
@@ -292,7 +371,17 @@ function badgeDetail(day: AttendanceDay, copy: Copy): string {
       parts.push(copy.detail.overtime);
       break;
     case "leave":
-      parts.push(copy.detail.leave);
+      // 半天假要说清是哪半天：环上是一段紫弧，说不出上午还是下午
+      parts.push(
+        day.leavePeriod === "am"
+          ? copy.detail.leaveAm
+          : day.leavePeriod === "pm"
+            ? copy.detail.leavePm
+            : copy.detail.leave,
+      );
+      break;
+    case "scheduled":
+      parts.push(copy.detail.scheduled);
       break;
     case "absent":
       parts.push(copy.detail.absent);

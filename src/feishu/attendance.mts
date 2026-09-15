@@ -36,6 +36,26 @@ export interface AttendanceDay {
   /** 下班打卡时刻 `HH:mm`。当天还没下班时没有。 */
   checkOut?: string;
   /**
+   * **上班卡那一次**的结论。
+   *
+   * 与 [`issues`] 的分野是「哪一次」：`issues` 是一天的异常集合，`["lack"]` 说不出
+   * 缺的是上班卡还是下班卡。日历上的环形角标要把起 / 收两段分开画，就必须知道这个。
+   *
+   * 没有排班、或者无需打卡（`NoNeedCheck`）时**没有这个字段**——那和「该打没打」
+   * 是两件事，混成一档会让加班日的环看起来像缺卡。
+   */
+  punchIn?: PunchStatus;
+  /** **下班卡那一次**的结论，理由同 [`punchIn`]。 */
+  punchOut?: PunchStatus;
+  /**
+   * 请假覆盖了哪半天。
+   *
+   * 飞书把请假放在 `check_*_result_supplement` 里，**上下两侧是分开的**，所以半天假
+   * 天然能读出来：只有上班侧是 `Leave` → 上午假，只有下班侧 → 下午假，两侧都是 → 全天。
+   * 这一条不是推断，是接口本来就给的信息，此前被 `kind: "leave"` 一档吃掉了。
+   */
+  leavePeriod?: LeavePeriod;
+  /**
    * 异常标记：迟到 / 早退 / 缺卡。
    *
    * **不影响 `kind`**——迟到仍然是出勤（`worked`）。工时口径按天算，
@@ -43,6 +63,17 @@ export interface AttendanceDay {
    */
   issues?: AttendanceIssue[];
 }
+
+/**
+ * 一次打卡的结论。
+ *
+ * `todo` 是「该打但还没到点 / 还没打」，飞书就叫这个名字（`check_*_result: "Todo"`）。
+ * 它**不是异常**：今天下午三点看，下班卡当然还没打。
+ */
+export type PunchStatus = "normal" | "late" | "early" | "lack" | "todo";
+
+/** 请假覆盖的时段。 */
+export type LeavePeriod = "am" | "pm" | "full";
 
 /**
  * 一天属于哪一类。
@@ -247,12 +278,18 @@ export function classify(
   const checkIn = firstTime(records, "in", offsetMinutes);
   const checkOut = lastTime(records, "out", offsetMinutes);
   const issues = collectIssues(records);
+  const punchIn = punchStatus(records, "in");
+  const punchOut = punchStatus(records, "out");
+  const leavePeriod = leavePeriodOf(records);
 
   const day: AttendanceDay = { date, kind: "rest" };
   if (checkIn) day.checkIn = checkIn;
   if (checkOut) day.checkOut = checkOut;
+  if (punchIn) day.punchIn = punchIn;
+  if (punchOut) day.punchOut = punchOut;
 
-  if (isLeave(records)) {
+  if (leavePeriod) {
+    day.leavePeriod = leavePeriod;
     day.kind = "leave";
     // 请假日的迟到早退没有意义，别把它标成异常
     return day;
@@ -275,14 +312,62 @@ export function classify(
   return day;
 }
 
-/** 请假：飞书把它放在 supplement 里，不区分年假 / 事假 / 病假 / 调休。 */
-function isLeave(records: TaskRecord[]): boolean {
-  return records.some(
-    (record) =>
-      record.check_in_result_supplement === "Leave" ||
-      record.check_out_result_supplement === "Leave",
+/**
+ * 请假覆盖了哪半天。没请假返回 `null`。
+ *
+ * 飞书把请假放在 `check_*_result_supplement` 里，不区分年假 / 事假 / 病假 / 调休，
+ * 但**上下两侧是分开的**——只有上班侧是 `Leave` 就是上午假，只有下班侧就是下午假。
+ * 上一版只判「有没有请假」，把这个信息丢了，于是「上午请假下午上班」和「全天请假」
+ * 在日历上长得一模一样。
+ */
+function leavePeriodOf(records: TaskRecord[]): LeavePeriod | null {
+  const morning = records.some(
+    (record) => record.check_in_result_supplement === "Leave",
   );
+  const afternoon = records.some(
+    (record) => record.check_out_result_supplement === "Leave",
+  );
+  if (morning && afternoon) return "full";
+  if (morning) return "am";
+  if (afternoon) return "pm";
+  return null;
 }
+
+/**
+ * **一次**打卡的结论。返回 `null` 表示这一次不需要打卡（无排班 / `NoNeedCheck`），
+ * 与「该打没打」是两件事。
+ *
+ * 一天可能有多条 `records`（分段班次），取**最差**的那一个：`Lack` > `Late`/`Early` >
+ * `Todo` > `Normal`。取第一条会让「上午正常、下午那段缺卡」显示成正常。
+ */
+function punchStatus(
+  records: TaskRecord[],
+  which: "in" | "out",
+): PunchStatus | null {
+  const order: PunchStatus[] = ["normal", "todo", "late", "early", "lack"];
+  let worst: PunchStatus | null = null;
+  for (const record of records) {
+    const raw = which === "in" ? record.check_in_result : record.check_out_result;
+    const status = PUNCH_RESULT[raw ?? ""];
+    if (!status) continue;
+    if (!worst || order.indexOf(status) > order.indexOf(worst)) worst = status;
+  }
+  return worst;
+}
+
+/**
+ * `check_*_result` → 结论。
+ *
+ * 表里没有的（`NoNeedCheck`、`SystemNormal` 之外的新枚举）一律当「不需要打卡」，
+ * **不当异常**：飞书加一个枚举不该让日历上冒出一片红环。
+ */
+const PUNCH_RESULT: Record<string, PunchStatus | undefined> = {
+  Normal: "normal",
+  Late: "late",
+  Early: "early",
+  Lack: "lack",
+  Todo: "todo",
+};
 
 /**
  * 收集异常。

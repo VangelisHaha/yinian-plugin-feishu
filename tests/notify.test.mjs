@@ -28,6 +28,7 @@ import { forgetTenantToken } from "../dist/feishu/tenant.mjs";
 import {
   configuredOpenId,
   isWebhookUrl,
+  readinessFor,
   webhookUrlFrom,
 } from "../dist/handlers/notify.mjs";
 
@@ -102,6 +103,15 @@ describe("投递方式", () => {
     // 粘成群分享链接是最常见的误操作
     assert.equal(isWebhookUrl("https://applink.feishu.cn/client/chat/open"), false);
     assert.equal(isWebhookUrl("http://open.feishu.cn/open-apis/bot/v2/hook/x"), false);
+    assert.equal(isWebhookUrl("https://open.feishu.cn/open-apis/bot/v2/hook/"), false);
+  });
+
+  it("就绪必须同时具备发送配置和目标", async () => {
+    const dir = tempDir();
+    assert.deepEqual(await readinessFor({}, dir), { ready: false });
+    assert.deepEqual(await readinessFor({ notifyWebhookUrl: HOOK }, dir), { ready: true });
+    assert.deepEqual(await readinessFor({ notifyMode: "botDm", appId: "id", appSecret: "secret" }, dir), { ready: false });
+    assert.deepEqual(await readinessFor({ notifyMode: "botDm", appId: "id", appSecret: "secret", notifyOpenId: "ou_target" }, dir), { ready: true });
   });
 
   it("地址两端的空白会被吃掉", () => {

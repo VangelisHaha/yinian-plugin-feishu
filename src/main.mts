@@ -53,5 +53,6 @@ start({
 
     "feishu.listCalendars": calendars.listCalendars,
     "feishu.testNotification": notify.testNotification,
+    "feishu.notificationReady": notify.readiness,
   },
 });

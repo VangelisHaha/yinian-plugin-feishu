@@ -45,7 +45,7 @@ const WEBHOOK_PREFIXES = [
 ];
 
 export function isWebhookUrl(value: string): boolean {
-  return WEBHOOK_PREFIXES.some((prefix) => value.startsWith(prefix));
+  return WEBHOOK_PREFIXES.some((prefix) => value.startsWith(prefix) && value.length > prefix.length);
 }
 
 export function webhookUrlFrom(config: Record<string, unknown>): string {
@@ -55,6 +55,24 @@ export function webhookUrlFrom(config: Record<string, unknown>): string {
 /** 用户手填的收件人 open_id。没授权过时这是唯一来源。 */
 export function configuredOpenId(config: Record<string, unknown>): string {
   return String(config["notifyOpenId"] ?? "").trim();
+}
+
+/** 宿主定期读取，只有能构造真实发送目标才宣告就绪。 */
+export async function readiness(): Promise<{ ready: boolean }> {
+  return readinessFor(configOf(), context().dataDir);
+}
+
+export async function readinessFor(config: Record<string, unknown>, dataDir: string): Promise<{ ready: boolean }> {
+  if (deliveryMode(config) === "webhook") {
+    return { ready: isWebhookUrl(webhookUrlFrom(config)) };
+  }
+  try {
+    const credentials = credentialsFrom(config);
+    if (!credentials.appId || !credentials.appSecret) return { ready: false };
+    return { ready: Boolean(await resolveOpenId(config, credentials, dataDir)) };
+  } catch {
+    return { ready: false };
+  }
 }
 
 /** open_id 一个账号一辈子不变，取到就缓存，别每条通知都去问一次。 */

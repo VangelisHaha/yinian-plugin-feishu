@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "yinian-feishu",
   "name": "飞书",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "author": "vangelis",
   "description": "把飞书任务、日历（含会议）与考勤同步进安时，并把安时的提醒发成飞书卡片",
   "homepage": "https://github.com/VangelisHaha/yinian-plugin-feishu",
@@ -68,9 +68,12 @@
           "name": "飞书考勤",
           "surfaces": [
             "dayBadge",
-            "sidebarStat"
+            "sidebarStat",
+            "timeMarker",
+            "timeBand",
+            "anchor"
           ],
-          "description": "在日历格子右上角标出出勤、加班、请假与打卡异常，并在侧栏「负载」里统计天数。数据来自飞书考勤的打卡记录，只读你自己的"
+          "description": "在日历格子右上角标出出勤、加班、请假与打卡异常，在时间轴上画打卡线与工作时段，并在侧栏「负载」里统计天数。数据来自飞书考勤的打卡记录，只读你自己的"
         }
       ]
     },

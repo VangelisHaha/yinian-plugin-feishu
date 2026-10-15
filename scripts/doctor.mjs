@@ -114,7 +114,14 @@ const SYNC_MODES = new Set(["interval", "manual", "eventDriven"]);
 const DAY_MARK_KINDS = new Set(["lunar", "solar_term", "festival", "holiday"]);
 
 /** 日历叠加层贴在哪，契约 §8.4。 */
-const OVERLAY_SURFACES = new Set(["dayBadge", "summary", "sidebarStat"]);
+const OVERLAY_SURFACES = new Set([
+  "dayBadge",
+  "summary",
+  "sidebarStat",
+  "timeMarker",
+  "timeBand",
+  "anchor",
+]);
 
 /** 宿主强制的间隔下限。 */
 const MIN_INTERVAL_FLOOR = 60;

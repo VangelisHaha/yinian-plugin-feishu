@@ -558,7 +558,16 @@ export interface DayMarksListResult {
 // 反过来**颜色与字体一律归宿主**：`tone` 是语义档位而不是色值。
 
 /** 会往哪儿贴。manifest 的 `contributes.calendarOverlay.providers[].surfaces`。 */
-export type OverlaySurface = "dayBadge" | "summary" | "sidebarStat";
+export type OverlaySurface =
+  | "dayBadge"
+  | "summary"
+  | "sidebarStat"
+  /** 时间轴上某天某时刻的一根线（打卡、预计下班）。日期面板的考勤条也跟它走。 */
+  | "timeMarker"
+  /** 某天的一段时间，画在刻度列底色上（在岗 / 到预计下班）。 */
+  | "timeBand"
+  /** 可被提醒引用的命名时刻（「上班」「下班」）。 */
+  | "anchor";
 
 /**
  * 语义档位，**不是颜色**。
@@ -676,6 +685,68 @@ export interface DayBadge {
    * 加了几小时，不悬浮就看不出来。
    */
   detail?: string;
+  /**
+   * 悬停的键值行，比 `detail` 详细（排班 / 上班卡 / 下班卡 / 在岗各一行）。
+   * 给了宿主优先用它；`arc` 给了就在值前画一个小色点。
+   */
+  detailRows?: OverlayDetailRow[];
+}
+
+export interface OverlayDetailRow {
+  k: string;
+  v: string;
+  arc?: BadgeArc;
+}
+
+export type MarkerSide = "leading" | "trailing";
+
+/**
+ * 时间轴上某天某时刻的一根线。`at` 是本地 `HH:mm`（严格两位，`9:02` 会被丢弃）。
+ * 每天最多 4 根，跨零点的夜班拆两天给。
+ */
+export interface TimeMarker {
+  date: string;
+  at: string;
+  side: MarkerSide;
+  /** 缺省 `idle`。 */
+  arc?: BadgeArc;
+  /** 预计（排班）而不是实际发生：画得更淡。 */
+  expected?: boolean;
+  /** 线右端的小字，最多 12 字。 */
+  label: string;
+  detail?: string;
+}
+
+/** 某天的一段时间，`from < to`，每天最多 2 段。 */
+export interface TimeBand {
+  date: string;
+  from: string;
+  to: string;
+  expected?: boolean;
+  label: string;
+  detail?: string;
+}
+
+/** 命名时刻。`key` 是你自己的稳定标识，提醒引用它。每天最多 4 个。 */
+export interface OverlayAnchor {
+  date: string;
+  key: string;
+  at: string;
+  label: string;
+  expected?: boolean;
+}
+
+export interface DayStripItem {
+  text: string;
+  arc?: BadgeArc;
+  side?: MarkerSide;
+  tone?: OverlayTone;
+}
+
+/** 日期面板标题下的考勤条，一天一条、最多 3 项。 */
+export interface DayStrip {
+  date: string;
+  items: DayStripItem[];
 }
 
 /**
@@ -755,6 +826,14 @@ export interface CalendarOverlayListResult {
   summary?: OverlaySummaryItem[];
   /** 侧栏「负载」卡里的竖排统计行，最多 4 项（宿主自己已经占了 3 行）。 */
   sidebarStats?: OverlaySummaryItem[];
+  /** 时间轴上的线（需声明 `timeMarker`）。 */
+  timeMarkers?: TimeMarker[];
+  /** 刻度列底色（需声明 `timeBand`）。 */
+  timeBands?: TimeBand[];
+  /** 命名时刻（需声明 `anchor`）。 */
+  anchors?: OverlayAnchor[];
+  /** 日期面板考勤条（跟 `timeMarker` 走）。 */
+  dayStrip?: DayStrip[];
 }
 
 // ── 设置面板 ─────────────────────────────────────────────────────────────

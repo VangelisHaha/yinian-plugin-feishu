@@ -174,6 +174,31 @@ export function readDays(
 }
 
 /**
+ * 缓存里见过的班次时刻：`shift_id → { start, end }`（最近那天的为准）。
+ *
+ * 飞书只在**有打卡记录**的日子带应上 / 应下时刻；未来的排班日 `records` 是空的，
+ * 但 `shift_id` 一样——借同一班次见过的时刻，「预计下班」与按上下班提醒的锚点才排得出
+ * 未来几天（`docs/workspace/28` §4）。读缓存，不联网。
+ */
+export function knownShiftTimes(
+  dataDir: string,
+): Map<string, { start: string; end: string }> {
+  const cache = state.cache ?? loadCache(dataDir);
+  if (cache) state.cache = cache;
+  const known = new Map<string, { start: string; end: string }>();
+  if (!cache) return known;
+  const days = Object.values(cache.days).sort((a, b) =>
+    a.date.localeCompare(b.date),
+  );
+  for (const day of days) {
+    if (day.shiftId && day.shiftStart && day.shiftEnd) {
+      known.set(day.shiftId, { start: day.shiftStart, end: day.shiftEnd });
+    }
+  }
+  return known;
+}
+
+/**
  * 记下用户正在看哪段时间，并确保后台刷新在跑。
  *
  * **由 `calendarOverlay.list` 调用，而它只在用户显式启用后才会被宿主调到**——

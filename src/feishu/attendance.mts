@@ -62,6 +62,12 @@ export interface AttendanceDay {
    * 迟到十分钟不该让这一天从出勤变成别的什么。
    */
   issues?: AttendanceIssue[];
+  /** 当天班次 id（`shift_id`，非 0 才有）。未来的日子没有打卡记录，靠它借同一班次的时刻。 */
+  shiftId?: string;
+  /** 排班应上 `HH:mm`（第一段班次）。 */
+  shiftStart?: string;
+  /** 排班应下 `HH:mm`（最后一段班次）。 */
+  shiftEnd?: string;
 }
 
 /**
@@ -117,6 +123,12 @@ interface TaskRecord {
   check_out_result_supplement?: string;
   check_in_record?: { check_time?: string };
   check_out_record?: { check_time?: string };
+  /**
+   * 这一段班次的应上 / 应下时刻，秒级时间戳字符串（飞书 `user_tasks` 记录自带）。
+   * 「预计下班」与按上下班提醒的锚点都从这里来（`docs/workspace/28` §2.3）。
+   */
+  check_in_shift_time?: string;
+  check_out_shift_time?: string;
 }
 
 interface QueryResponse {
@@ -283,6 +295,11 @@ export function classify(
   const leavePeriod = leavePeriodOf(records);
 
   const day: AttendanceDay = { date, kind: "rest" };
+  if (scheduled && result.shift_id) day.shiftId = result.shift_id;
+  const shiftStart = shiftClock(records, "in", offsetMinutes);
+  const shiftEnd = shiftClock(records, "out", offsetMinutes);
+  if (shiftStart) day.shiftStart = shiftStart;
+  if (shiftEnd) day.shiftEnd = shiftEnd;
   if (checkIn) day.checkIn = checkIn;
   if (checkOut) day.checkOut = checkOut;
   if (punchIn) day.punchIn = punchIn;
@@ -429,6 +446,24 @@ function punchTimes(
   }
   times.sort((left, right) => left - right);
   return times.map((seconds) => formatClock(seconds, offsetMinutes));
+}
+
+/** 班次应上（第一段）/ 应下（最后一段）时刻。没有就 `undefined`。 */
+function shiftClock(
+  records: TaskRecord[],
+  which: "in" | "out",
+  offsetMinutes: number,
+): string | undefined {
+  const times = records
+    .map((record) =>
+      Number(
+        which === "in" ? record.check_in_shift_time : record.check_out_shift_time,
+      ),
+    )
+    .filter((seconds) => Number.isFinite(seconds) && seconds > 0)
+    .sort((left, right) => left - right);
+  const pick = which === "in" ? times[0] : times[times.length - 1];
+  return pick === undefined ? undefined : formatClock(pick, offsetMinutes);
 }
 
 function formatClock(seconds: number, offsetMinutes: number): string {

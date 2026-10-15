@@ -40,12 +40,19 @@ import {
 } from "../feishu/attendance.mjs";
 import {
   isWarmingUp,
+  knownShiftTimes,
   noteInterest,
   readDays,
   resumeIfEnabled,
   type AttendanceSource,
 } from "../feishu/attendanceStore.mjs";
 import { capabilitiesFrom } from "../feishu/capability.mjs";
+import {
+  nowIn,
+  timelineCopyFor,
+  toDetailRows,
+  toTimeline,
+} from "./attendanceTimeline.mjs";
 import { configOf, credentialsFrom } from "../feishu/pluginConfig.mjs";
 
 /** manifest 里声明的 provider id。 */
@@ -237,14 +244,30 @@ export async function list(
 
   const showWorkdays = showWorkdayBadges(config);
   // 「今天」按公司时区算而不是本机时区：出差到别的时区时，今天那一格该跟着公司走
-  const today = todayKey(parseUtcOffset(source.utcOffset));
+  const offset = parseUtcOffset(source.utcOffset);
+  const today = todayKey(offset);
+  const now = nowIn(offset);
+  const shifts = knownShiftTimes(source.dataDir);
+  const lineCopy = timelineCopyFor(request.locale);
   const badges = badgeDays
-    .map((day) => toBadge(day, copy, showWorkdays, today))
+    .map((day) => {
+      const badge = toBadge(day, copy, showWorkdays, today);
+      // 悬停键值行（docs/workspace/28 §7 ②「尽可能详细」）
+      if (badge) badge.detailRows = toDetailRows(day, lineCopy, now, shifts);
+      return badge;
+    })
     .filter((badge): badge is DayBadge => badge !== null);
+
+  // 时间轴叠加：打卡线、工作时段、命名时刻、考勤条（docs/workspace/28 §2.3）
+  const timelines = badgeDays.map((day) => toTimeline(day, lineCopy, now, shifts));
 
   return {
     badges,
     sidebarStats: toStats(summaryDays, copy),
+    timeMarkers: timelines.flatMap((line) => line.markers),
+    timeBands: timelines.flatMap((line) => line.bands),
+    anchors: timelines.flatMap((line) => line.anchors),
+    dayStrip: timelines.flatMap((line) => (line.strip ? [line.strip] : [])),
   };
 }
 

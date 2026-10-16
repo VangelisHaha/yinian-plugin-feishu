@@ -53,6 +53,12 @@ const CACHE_VERSION = 3;
 /** 后台刷新间隔。考勤几分钟级的新鲜度完全够用，打卡也不是秒级要看到的事。 */
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 
+/**
+ * 关注区间**至少**覆盖最近这么多天（2026-10-16 用户：历史要能看到近 90 天的考勤与加班）。
+ * 原来只拉用户翻到过的月份，没翻过的历史就一直是空的；同步给手机的投影也是 90 天。
+ */
+const MIN_HISTORY_DAYS = 90;
+
 /** 两次刷新之间的最小间隔，挡住「翻月翻得飞快」时的连续触发。 */
 const MIN_REFRESH_GAP_MS = 60 * 1000;
 
@@ -215,7 +221,9 @@ export function noteInterest(source: AttendanceSource, from: string, to: string)
   const cache = state.cache ?? loadCache(dataDir(source)) ?? emptyCache();
   state.cache = cache;
 
-  const merged = widen(cache.watchFrom, cache.watchTo, from, to);
+  const floor = new Date(Date.now() - MIN_HISTORY_DAYS * 86_400_000);
+  const historyFrom = toDateKey(new Date(Date.UTC(floor.getFullYear(), floor.getMonth(), floor.getDate())));
+  const merged = widen(cache.watchFrom, cache.watchTo, from < historyFrom ? from : historyFrom, to);
   const changed = merged.from !== cache.watchFrom || merged.to !== cache.watchTo;
   cache.watchFrom = merged.from;
   cache.watchTo = merged.to;

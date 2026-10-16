@@ -101,6 +101,8 @@ export async function fetchOvertimeApprovals(options: {
   approvalName?: string;
   /** 发起时间下界（秒）。申请总是先于加班发起，往回看一段就够。 */
   sinceSeconds: number;
+  /** 发起时间上界（秒），缺省现在 + 1 天。 */
+  untilSeconds?: number;
 }): Promise<Map<string, OvertimeApproval>> {
   const instances: InitiatedInstance[] = [];
   let pageToken = "";
@@ -109,7 +111,9 @@ export async function fetchOvertimeApprovals(options: {
       const query: Record<string, string> = {
         page_size: String(PAGE_SIZE),
         locale: "zh-CN",
+        // 飞书要求两个时间戳要么都给、要么都不给（只给起点会直接报 -500），2026-10-16 真实撞到
         start_timestamp: String(options.sinceSeconds),
+        end_timestamp: String(options.untilSeconds ?? Math.floor(Date.now() / 1000) + 86_400),
       };
       if (pageToken) query["page_token"] = pageToken;
       const data = await apiRequest<InitiatedResponse>({

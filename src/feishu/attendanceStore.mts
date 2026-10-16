@@ -221,8 +221,7 @@ export function noteInterest(source: AttendanceSource, from: string, to: string)
   const cache = state.cache ?? loadCache(dataDir(source)) ?? emptyCache();
   state.cache = cache;
 
-  const floor = new Date(Date.now() - MIN_HISTORY_DAYS * 86_400_000);
-  const historyFrom = toDateKey(new Date(Date.UTC(floor.getFullYear(), floor.getMonth(), floor.getDate())));
+  const historyFrom = historyFloor();
   const merged = widen(cache.watchFrom, cache.watchTo, from < historyFrom ? from : historyFrom, to);
   const changed = merged.from !== cache.watchFrom || merged.to !== cache.watchTo;
   cache.watchFrom = merged.from;
@@ -282,8 +281,19 @@ export function resumeIfEnabled(source: AttendanceSource): void {
   if (!cache) return;
   state.cache = cache;
   if (!cache.watchFrom || !cache.watchTo) return;
+  // 启动时就把近 90 天并进关注区间：不然这一轮按旧区间拉，紧接着的 list 扩了区间又被
+  // 「两次刷新至少隔 1 分钟」挡住，历史要等 15 分钟后的下一轮才出现
+  const merged = widen(cache.watchFrom, cache.watchTo, historyFloor(), cache.watchTo);
+  cache.watchFrom = merged.from;
+  cache.watchTo = merged.to;
   void refresh(source);
   ensureTimer(source);
+}
+
+/** 最近 [`MIN_HISTORY_DAYS`] 天的起点日期键。 */
+function historyFloor(): string {
+  const floor = new Date(Date.now() - MIN_HISTORY_DAYS * 86_400_000);
+  return toDateKey(new Date(Date.UTC(floor.getFullYear(), floor.getMonth(), floor.getDate())));
 }
 
 /**

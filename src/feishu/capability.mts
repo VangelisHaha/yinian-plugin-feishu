@@ -24,13 +24,14 @@
  */
 
 /** 一项可以单独勾选的能力。 */
-export type Capability = "tasks" | "calendar" | "meetings" | "attendance";
+export type Capability = "tasks" | "calendar" | "meetings" | "attendance" | "overtime";
 
 export const ALL_CAPABILITIES: readonly Capability[] = [
   "tasks",
   "calendar",
   "meetings",
   "attendance",
+  "overtime",
 ];
 
 /**
@@ -50,6 +51,9 @@ const CAPABILITY_SCOPES: Record<Capability, readonly string[]> = {
     "vc:meeting.meetingevent:read",
   ],
   attendance: ["attendance:task:readonly", "contact:user.id:readonly"],
+  // 加班审批：查本人发起的「加班申请」，日历上把那天标「加」（含还在审批中的、未来的）。
+  // 单独一项：审批里还有别的单据，不想交出这个权限的人可以只要考勤
+  overtime: ["approval:instance:read"],
 };
 
 /**
@@ -65,6 +69,7 @@ const CAPABILITY_LABELS: Record<Capability, string> = {
   calendar: "飞书日历同步",
   meetings: "飞书会议同步",
   attendance: "飞书考勤",
+  overtime: "飞书加班审批",
 };
 
 export function capabilityLabel(capability: Capability): string {

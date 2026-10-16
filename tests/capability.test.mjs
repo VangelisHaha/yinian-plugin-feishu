@@ -79,8 +79,14 @@ describe("scope 拼装", () => {
   it("全勾时是各组的并集，不重复", () => {
     const scopes = scopesFor(ALL_CAPABILITIES).split(" ");
     assert.equal(new Set(scopes).size, scopes.length, "有重复 scope");
-    // tasks 2 + calendar 2 + meetings 3 + attendance 2 + offline_access
-    assert.equal(scopes.length, 2 + 2 + 3 + 2 + 1);
+    // tasks 2 + calendar 2 + meetings 3 + attendance 2 + overtime 1 + offline_access
+    assert.equal(scopes.length, 2 + 2 + 3 + 2 + 1 + 1);
+  });
+
+  it("加班审批是单独一项，只要 approval:instance:read", () => {
+    const scopes = scopesFor(["overtime"]).split(" ");
+    assert.deepEqual(scopes, ["approval:instance:read", "offline_access"]);
+    assert.equal(scopesFor(["attendance"]).includes("approval:"), false, "只勾考勤不该顺带要审批权限");
   });
 
   it("只勾考勤时不含任务、日历、会议权限", () => {

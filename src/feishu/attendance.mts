@@ -68,6 +68,11 @@ export interface AttendanceDay {
   shiftStart?: string;
   /** 排班应下 `HH:mm`（最后一段班次）。 */
   shiftEnd?: string;
+  /**
+   * 这天有一条没被拒 / 撤回的「加班申请」（`feishu/overtime.mts`）。有它就标「加」，
+   * 未来的日子也标——提了申请就是要加班。
+   */
+  overtimeApproval?: { start: string; end: string; status: string };
 }
 
 /**

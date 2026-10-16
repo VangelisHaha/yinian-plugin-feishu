@@ -47,6 +47,7 @@ import {
   type AttendanceSource,
 } from "../feishu/attendanceStore.mjs";
 import { capabilitiesFrom } from "../feishu/capability.mjs";
+import { DEFAULT_OVERTIME_APPROVAL_NAME } from "../feishu/overtime.mjs";
 import {
   nowIn,
   timelineCopyFor,
@@ -81,6 +82,8 @@ interface Copy {
     absent: string;
     punch: (checkIn: string, checkOut: string) => string;
     punchIn: (checkIn: string) => string;
+    /** 加班申请那一句：时段 + 审批中 / 已通过。 */
+    approval: (start: string, end: string, pending: boolean) => string;
     issues: string;
     late: string;
     early: string;
@@ -119,6 +122,7 @@ const ZH: Copy = {
     absent: "有排班但没有打卡记录",
     punch: (checkIn, checkOut) => `打卡 ${checkIn}–${checkOut}`,
     punchIn: (checkIn) => `打卡 ${checkIn}，尚未下班`,
+    approval: (start, end, pending) => `加班申请 ${start}–${end}（${pending ? "审批中" : "已通过"}）`,
     issues: "异常",
     late: "迟到",
     early: "早退",
@@ -159,6 +163,7 @@ const EN: Copy = {
     absent: "Scheduled but no punch record",
     punch: (checkIn, checkOut) => `Punched ${checkIn}–${checkOut}`,
     punchIn: (checkIn) => `Punched in at ${checkIn}, no punch out yet`,
+    approval: (start, end, pending) => `Overtime request ${start}–${end} (${pending ? "pending" : "approved"})`,
     issues: "Issues",
     late: "late",
     early: "left early",
@@ -296,12 +301,15 @@ export function toBadge(
   showWorkdays: boolean,
   today: string,
 ): DayBadge | null {
-  if (day.kind === "rest") return null;
-  if (day.kind === "scheduled" && day.date !== today) return null;
+  // 有加班申请的日子一律画「加」：休息日、未来的日子都画（提了申请就是要加班）
+  const approved = Boolean(day.overtimeApproval) && day.leavePeriod !== "full";
+  if (day.kind === "rest" && !approved) return null;
+  if (day.kind === "scheduled" && day.date !== today && !approved) return null;
   if (
     (day.kind === "worked" || day.kind === "scheduled") &&
     !showWorkdays &&
-    !hasIssues(day)
+    !hasIssues(day) &&
+    !approved
   ) {
     return null;
   }
@@ -331,7 +339,7 @@ export function toBadge(
  */
 function ringLabel(day: AttendanceDay, copy: Copy): string {
   if (day.leavePeriod === "full") return copy.badge.leave;
-  if (day.kind === "overtime") return copy.badge.overtime;
+  if (day.kind === "overtime" || day.overtimeApproval) return copy.badge.overtime;
   return copy.badge.worked;
 }
 
@@ -380,7 +388,7 @@ function hasIssues(day: AttendanceDay): boolean {
  * 「高优先级」抢同一层注意力），宿主收到也会降级成 `strong`。
  */
 function badgeTone(day: AttendanceDay): OverlayTone {
-  if (day.kind === "overtime") return "strong";
+  if (day.kind === "overtime" || day.overtimeApproval) return "strong";
   if (day.kind === "absent") return "strong";
   if (hasIssues(day)) return "strong";
   if (day.kind === "leave") return "mute";
@@ -389,9 +397,17 @@ function badgeTone(day: AttendanceDay): OverlayTone {
 
 function badgeDetail(day: AttendanceDay, copy: Copy): string {
   const parts: string[] = [];
+  if (day.overtimeApproval && day.kind !== "overtime") {
+    const { start, end, status } = day.overtimeApproval;
+    parts.push(copy.detail.approval(start, end, status !== "2"));
+  }
   switch (day.kind) {
     case "overtime":
       parts.push(copy.detail.overtime);
+      if (day.overtimeApproval) {
+        const { start, end, status } = day.overtimeApproval;
+        parts.push(copy.detail.approval(start, end, status !== "2"));
+      }
       break;
     case "leave":
       // 半天假要说清是哪半天：环上是一段紫弧，说不出上午还是下午
@@ -537,10 +553,14 @@ function sourceFrom(config: Record<string, unknown>): AttendanceSource | null {
   const credentials = credentialsFrom(config);
   if (!credentials.appId || !credentials.appSecret) return null;
   const utcOffset = String(config["attendanceUtcOffset"] ?? "").trim();
+  const approvalName =
+    String(config["attendanceOvertimeApprovalName"] ?? "").trim() || DEFAULT_OVERTIME_APPROVAL_NAME;
   return {
     credentials,
     dataDir: context().dataDir,
     ...(utcOffset ? { utcOffset } : {}),
+    // 「飞书加班审批」单独授权：没勾就不拉，「加」只按休息日打卡判
+    ...(capabilitiesFrom(config).includes("overtime") ? { overtime: { approvalName } } : {}),
   };
 }
 

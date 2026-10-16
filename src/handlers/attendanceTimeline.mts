@@ -32,6 +32,7 @@ export interface TimelineCopy {
   rowIn: string;
   rowOut: string;
   rowWorked: string;
+  rowApproval: string;
   notYet: string;
   status: Record<PunchStatus, string>;
   kind: Record<AttendanceDay["kind"], string>;
@@ -59,6 +60,7 @@ const ZH: TimelineCopy = {
   rowIn: "上班卡",
   rowOut: "下班卡",
   rowWorked: "在岗",
+  rowApproval: "加班申请",
   notYet: "还没打",
   status: { normal: "正常", late: "迟到", early: "早退", lack: "缺卡", todo: "还没打" },
   kind: {
@@ -93,6 +95,7 @@ const EN: TimelineCopy = {
   rowIn: "Clock-in",
   rowOut: "Clock-out",
   rowWorked: "On duty",
+  rowApproval: "Overtime request",
   notYet: "not yet",
   status: { normal: "on time", late: "late", early: "early", lack: "missing", todo: "not yet" },
   kind: {
@@ -142,7 +145,9 @@ export function shiftOf(
 ): { start: string; end: string } | null {
   if (day.shiftStart && day.shiftEnd) return { start: day.shiftStart, end: day.shiftEnd };
   const known = day.shiftId ? shifts.get(day.shiftId) : undefined;
-  return known ?? null;
+  if (known) return known;
+  // 休息日加班：没有排班，用加班申请的时段当「这天的班」
+  return day.overtimeApproval ? { start: day.overtimeApproval.start, end: day.overtimeApproval.end } : null;
 }
 
 function minutesOf(clock: string): number {
@@ -211,7 +216,14 @@ export function toTimeline(
   const shift = shiftOf(day, shifts);
   const past = day.date <= now.date;
 
-  if (shift && (day.kind === "worked" || day.kind === "scheduled" || day.kind === "absent" || day.kind === "leave")) {
+  if (
+    shift &&
+    (day.kind === "worked" ||
+      day.kind === "scheduled" ||
+      day.kind === "absent" ||
+      day.kind === "leave" ||
+      day.overtimeApproval)
+  ) {
     anchors.push(
       { date: day.date, key: "workStart", at: shift.start, label: copy.anchorWorkStart, expected: true },
       { date: day.date, key: "workEnd", at: shift.end, label: copy.anchorWorkEnd, expected: true },
@@ -296,7 +308,11 @@ export function toDetailRows(
   shifts: ShiftTable,
 ): OverlayDetailRow[] {
   const rows: OverlayDetailRow[] = [];
-  const kind = day.leavePeriod ? copy.leave[day.leavePeriod] : copy.kind[day.kind];
+  const kind = day.leavePeriod
+    ? copy.leave[day.leavePeriod]
+    : day.overtimeApproval && day.kind !== "overtime"
+      ? copy.kind.overtime
+      : copy.kind[day.kind];
   rows.push({ k: copy.rowKind, v: kind });
   const shift = shiftOf(day, shifts);
   if (shift) rows.push({ k: copy.rowShift, v: `${shift.start}–${shift.end}` });
@@ -312,6 +328,13 @@ export function toDetailRows(
   });
   const worked = workedMinutes(day, now);
   if (worked !== null) rows.push({ k: copy.rowWorked, v: copy.duration(worked) });
+  if (day.overtimeApproval) {
+    const { start, end, status } = day.overtimeApproval;
+    rows.push({
+      k: copy.rowApproval,
+      v: `${start}–${end} · ${status === "2" ? (copy === EN ? "approved" : "已通过") : copy === EN ? "pending" : "审批中"}`,
+    });
+  }
   return rows;
 }
 

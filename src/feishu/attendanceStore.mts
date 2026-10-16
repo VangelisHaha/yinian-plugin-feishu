@@ -37,6 +37,7 @@ import {
   toDateKey,
   type AttendanceDay,
 } from "./attendance.mjs";
+import { fetchOvertimeApprovals } from "./overtime.mjs";
 
 /**
  * 缓存文件格式版本。**改 [`AttendanceDay`] 的形状必须同时加这个数**——
@@ -44,8 +45,10 @@ import {
  *
  * `2`（2026-09-15）：加了 `punchIn` / `punchOut` / `leavePeriod`，日历上的环形角标要
  * 靠它们把上下班两段分开画。旧缓存里没有这三个字段，留着会让整月的环都是空的。
+ *
+ * `3`（2026-10-16）：加了班次时刻 `shiftStart` / `shiftEnd` / `shiftId` 与加班审批 `overtimeApproval`。
  */
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 /** 后台刷新间隔。考勤几分钟级的新鲜度完全够用，打卡也不是秒级要看到的事。 */
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
@@ -87,6 +90,8 @@ export interface AttendanceSource {
   credentials: Credentials;
   dataDir: string;
   utcOffset?: string;
+  /** 勾了「飞书加班审批」时有：按这个审批名拉加班申请。 */
+  overtime?: { approvalName: string };
 }
 
 function cachePath(dataDir: string): string {
@@ -318,6 +323,27 @@ async function refresh(source: AttendanceSource): Promise<void> {
 
     // 合并而不是替换：用户翻回上个月时，这个月的数据还在
     for (const day of days) cache.days[day.date] = day;
+
+    // 加班审批（勾了「飞书加班审批」才拉）。先清掉关注区间里旧的标记：撤回 / 被拒的要消失
+    if (source.overtime) {
+      const start = dateFromKey(cache.watchFrom);
+      const approvals = await fetchOvertimeApprovals({
+        credentials: source.credentials,
+        dataDir: source.dataDir,
+        approvalName: source.overtime.approvalName,
+        // 申请先于加班发起：从关注区间起点再往前 31 天
+        sinceSeconds: Math.floor(((start?.getTime() ?? Date.now()) - 31 * 86_400_000) / 1000),
+      });
+      for (const day of Object.values(cache.days)) {
+        if (day.date >= cache.watchFrom && day.date <= cache.watchTo) delete day.overtimeApproval;
+      }
+      for (const approval of approvals.values()) {
+        if (approval.date < cache.watchFrom || approval.date > cache.watchTo) continue;
+        const day = cache.days[approval.date] ?? { date: approval.date, kind: "rest" as const };
+        day.overtimeApproval = { start: approval.start, end: approval.end, status: approval.status };
+        cache.days[approval.date] = day;
+      }
+    }
     cache.fetchedAt = Date.now();
     saveCache(source.dataDir, cache);
     logger.info("考勤缓存已刷新", {

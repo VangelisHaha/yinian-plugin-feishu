@@ -5,7 +5,7 @@
       "key": "howto",
       "type": "note",
       "label": "准备工作",
-      "text": "在[飞书开放平台](https://open.feishu.cn/app)建一个**自建应用**。下面「要用哪些能力」勾了什么，就在开放平台申请对应的权限——**只勾你真的要用的**，不用的能力不必授权。\n\n- 飞书任务同步：`task:task:read`、`task:task:write`\n- 飞书日历同步：`calendar:calendar:read`、`calendar:calendar.event:read`\n- 飞书会议同步：`vc:meeting.search:read`、`vc:meeting:readonly`、`vc:meeting.meetingevent:read`\n- 飞书考勤：`attendance:task:readonly`、`contact:user.id:readonly`\n- 把提醒发到飞书（单聊）：`im:message:send_as_bot`\n\n前四项要走一次用户授权，所以还要开启「设备码流程」并加 `offline_access`；**最后一项不需要授权**，它用应用自己的身份发消息。改过权限或改过勾选后要**重新授权一次**。"
+      "text": "在[飞书开放平台](https://open.feishu.cn/app)建一个**自建应用**。下面「要用哪些能力」勾了什么，就在开放平台申请对应的权限——**只勾你真的要用的**，不用的能力不必授权。\n\n- 飞书任务同步：`task:task:read`、`task:task:write`\n- 飞书日历同步：`calendar:calendar:read`、`calendar:calendar.event:read`\n- 飞书会议同步：`vc:meeting.search:read`、`vc:meeting:readonly`、`vc:meeting.meetingevent:read`\n- 飞书考勤：`attendance:task:readonly`、`contact:user.id:readonly`\n- 飞书加班审批：`approval:instance:read`\n- 把提醒发到飞书（单聊）：`im:message:send_as_bot`\n\n前五项要走一次用户授权，所以还要开启「设备码流程」并加 `offline_access`；**最后一项不需要授权**，它用应用自己的身份发消息。改过权限或改过勾选后要**重新授权一次**。"
     },
     {
       "key": "brand",
@@ -61,6 +61,10 @@
         {
           "value": "attendance",
           "label": "飞书考勤"
+        },
+        {
+          "value": "overtime",
+          "label": "飞书加班审批"
         }
       ],
       "help": "授权范围按这里的勾选申请，勾一个授一个、勾三个一次授三个。改了勾选要重新点「开始授权」——飞书每次授权只给这一次请求的权限，不会叠加。一个都不勾也能用，那时只有下面的通知能力生效"
@@ -95,7 +99,7 @@
           "key": "attendanceNote",
           "type": "note",
           "label": "说明",
-          "text": "勾上上面的「飞书考勤」并重新授权之后，还要在**日历侧栏的「日历叠加」**里把「飞书考勤」打开才会真的显示——这是刻意的两步：装插件与「让它读我的考勤」是两次独立的确认，关着的时候安时根本不会去调它。\n\n打开后月视图格子的右上角会出现角标（**班**出勤、**加**休息日加班、**假**请假、**异**打卡异常），鼠标悬浮看打卡时间；侧栏的「负载」卡里会多几行天数统计。考勤在后台每 15 分钟刷一次，翻月不会等网络。"
+          "text": "勾上上面的「飞书考勤」并重新授权之后，还要在**日历侧栏的「日历叠加」**里把「飞书考勤」打开才会真的显示——这是刻意的两步：装插件与「让它读我的考勤」是两次独立的确认，关着的时候安时根本不会去调它。\n\n打开后月视图格子的右上角会出现角标（**班**出勤、**加**加班——休息日打了卡，或勾了「飞书加班审批」时有加班申请的那天、**假**请假），鼠标悬浮看打卡时间；侧栏的「负载」卡里会多几行天数统计。考勤在后台每 15 分钟刷一次，翻月不会等网络。"
         },
         {
           "key": "attendanceShowWorkdays",
@@ -111,6 +115,14 @@
           "default": "+08:00",
           "maxLength": 6,
           "help": "打卡时刻按这个偏移渲染。填公司所在时区，不是你此刻所在的时区——出差时看到的应当还是公司时区的那个打卡时间"
+        },
+        {
+          "key": "attendanceOvertimeApprovalName",
+          "type": "string",
+          "label": "加班审批名称",
+          "default": "加班申请",
+          "maxLength": 40,
+          "help": "勾了上面的「飞书加班审批」后，按这个审批名找你发起的加班申请：审批中或已通过的那天在日历上标「加」，未来的也标。被拒、撤回的不算。公司的审批叫别的名字时改这里"
         }
       ]
     },

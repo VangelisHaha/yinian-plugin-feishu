@@ -54,6 +54,26 @@ const CACHE_VERSION = 3;
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 
 /**
+ * 请求节流（2026-10-21 用户：尽量减少对飞书的请求，没必要反复查历史的考勤）。
+ *
+ * 原来每 15 分钟把整个关注区间（≥ 90 天、30 天一段）和审批列表全拉一遍，一天 500+ 个请求，
+ * 九成九是已经不会再变的历史。现在分层：
+ *
+ * - **近的**（前天到明天）每 15 分钟拉，1 个请求——打卡、请假、批了加班都在这里变；
+ * - **近 30 天的已结算部分**每天核对一次，1 个请求——补卡、改卡通常在几天内；
+ * - **更早的历史**只在没拉过时补一次，之后不再碰；
+ * - **加班审批**每小时一次；认到审批定义 code 之后只查这一种，通常 1 页；
+ * - **夜里**（0–6 点）定时器不动。
+ */
+const RECENT_BACK_DAYS = 2;
+const SETTLED_RECHECK_DAYS = 30;
+const SETTLED_RECHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const OVERTIME_INTERVAL_MS = 60 * 60 * 1000;
+/** 加班申请先于加班发起；往前看这么多天就够，更早的只在第一次全量时扫。 */
+const OVERTIME_RECENT_DAYS = 45;
+const OVERTIME_LOOKBACK_DAYS = 31;
+
+/**
  * 关注区间**至少**覆盖最近这么多天（2026-10-16 用户：历史要能看到近 90 天的考勤与加班）。
  * 原来只拉用户翻到过的月份，没翻过的历史就一直是空的；同步给手机的投影也是 90 天。
  */
@@ -72,6 +92,87 @@ interface CacheFile {
   /** 关注区间，后台按它刷。 */
   watchFrom: string;
   watchTo: string;
+  /** 已结算历史拉到了哪天（含）。更早的不再碰；空 = 还没拉过。 */
+  loadedFrom?: string;
+  /** 上次核对近 30 天的时刻（毫秒）。 */
+  recheckedAt?: number;
+  /** 加班审批：上次拉取时刻、已覆盖到的发起日期下界、认到的审批定义 code 与审批名。 */
+  overtimeAt?: number;
+  overtimeFrom?: string;
+  overtimeCode?: string;
+  overtimeName?: string;
+}
+
+/** 这一轮要发哪些请求。纯函数的产物，单测直接断言。 */
+export interface RefreshPlan {
+  /** 要拉考勤的闭区间（每段内部还会按 30 天切）。 */
+  attendance: Array<[string, string]>;
+  /** 要拉加班审批吗；`mode` 说是全量扫还是只看最近。 */
+  overtime: null | { mode: "full" | "recent"; sinceDate: string; definitionCode?: string };
+}
+
+function shiftKey(key: string, days: number): string {
+  const date = dateFromKey(key);
+  if (!date) return key;
+  date.setUTCDate(date.getUTCDate() + days);
+  return toDateKey(date);
+}
+
+/**
+ * 决定这一轮拉什么。**纯函数**：只看缓存里的记账、现在几点、今天几号。
+ *
+ * 为什么「已结算」线画在前天：打卡补卡、请假回填常在当天或第二天，前天之前的基本定了；
+ * 更早出错的话靠每天一次的近 30 天核对兜住。
+ */
+export function planRefresh(
+  cache: Pick<
+    CacheFile,
+    | "watchFrom"
+    | "watchTo"
+    | "loadedFrom"
+    | "recheckedAt"
+    | "overtimeAt"
+    | "overtimeFrom"
+    | "overtimeCode"
+    | "overtimeName"
+  >,
+  nowMs: number,
+  today: string,
+  overtimeName: string | null,
+): RefreshPlan {
+  const attendance: Array<[string, string]> = [];
+  const tomorrow = shiftKey(today, 1);
+  attendance.push([shiftKey(today, -RECENT_BACK_DAYS), tomorrow]);
+
+  const settledTo = shiftKey(today, -RECENT_BACK_DAYS - 1);
+  const loadedFrom = cache.loadedFrom ?? "";
+  if (cache.watchFrom && (!loadedFrom || cache.watchFrom < loadedFrom)) {
+    // 历史没拉全：只补缺的那一段（从没拉过就是整段）
+    const to = loadedFrom && loadedFrom <= settledTo ? shiftKey(loadedFrom, -1) : settledTo;
+    if (cache.watchFrom <= to) attendance.push([cache.watchFrom, to]);
+  } else {
+    const due = nowMs - (cache.recheckedAt ?? 0) >= SETTLED_RECHECK_INTERVAL_MS;
+    if (due) {
+      const from = shiftKey(today, -SETTLED_RECHECK_DAYS);
+      attendance.push([from < cache.watchFrom ? cache.watchFrom : from, settledTo]);
+    }
+  }
+
+  let overtime: RefreshPlan["overtime"] = null;
+  if (overtimeName !== null) {
+    const nameChanged = (cache.overtimeName ?? "") !== overtimeName;
+    const due = nameChanged || nowMs - (cache.overtimeAt ?? 0) >= OVERTIME_INTERVAL_MS;
+    if (due) {
+      const wantFrom = shiftKey(cache.watchFrom || today, -OVERTIME_LOOKBACK_DAYS);
+      const full = nameChanged || !cache.overtimeFrom || wantFrom < cache.overtimeFrom;
+      overtime = {
+        mode: full ? "full" : "recent",
+        sinceDate: full ? wantFrom : shiftKey(today, -OVERTIME_RECENT_DAYS),
+        ...(!nameChanged && cache.overtimeCode ? { definitionCode: cache.overtimeCode } : {}),
+      };
+    }
+  }
+  return { attendance, overtime };
 }
 
 interface RuntimeState {
@@ -126,6 +227,11 @@ function loadCache(dataDir: string): CacheFile | null {
   } catch {
     return null;
   }
+}
+
+/** 夜里（0–6 点，本机时间）定时器不发请求：没人在看，也不会有人打卡。 */
+function isQuietHour(at: Date = new Date()): boolean {
+  return at.getHours() < 6;
 }
 
 /**
@@ -263,6 +369,7 @@ function dataDir(source: AttendanceSource): string {
 function ensureTimer(source: AttendanceSource): void {
   if (state.timer) return;
   state.timer = setInterval(() => {
+    if (isQuietHour()) return;
     void refresh(source);
   }, REFRESH_INTERVAL_MS);
   // 别让定时器把进程钉住：宿主要关插件时应当能干净退出
@@ -330,43 +437,80 @@ async function refresh(source: AttendanceSource): Promise<void> {
       cache.employeeId = employeeId;
     }
 
-    const days = await fetchAttendance({
-      credentials: source.credentials,
-      dataDir: source.dataDir,
-      employeeId,
-      from: cache.watchFrom,
-      to: cache.watchTo,
-      ...(source.utcOffset === undefined ? {} : { utcOffset: source.utcOffset }),
-    });
+    const nowMs = Date.now();
+    const today = toDateKey(new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())));
+    const plan = planRefresh(cache, nowMs, today, source.overtime ? source.overtime.approvalName : null);
 
-    // 合并而不是替换：用户翻回上个月时，这个月的数据还在
-    for (const day of days) cache.days[day.date] = day;
+    let fetched = 0;
+    for (const [from, to] of plan.attendance) {
+      const days = await fetchAttendance({
+        credentials: source.credentials,
+        dataDir: source.dataDir,
+        employeeId,
+        from,
+        to,
+        ...(source.utcOffset === undefined ? {} : { utcOffset: source.utcOffset }),
+      });
+      // 合并而不是替换：用户翻回上个月时，这个月的数据还在
+      for (const day of days) {
+        const old = cache.days[day.date];
+        // 加班审批的标记不属于考勤接口，合并时带过去
+        cache.days[day.date] = old?.overtimeApproval ? { ...day, overtimeApproval: old.overtimeApproval } : day;
+      }
+      fetched += days.length;
+    }
+    // 记账：这一轮覆盖到的历史段、核对时刻。fetchAttendance 单段失败只记日志不抛，所以这里
+    // 只在整轮没抛异常时推进——抛了就留着下一轮重试
+    const recentFrom = plan.attendance[0]?.[0] ?? today;
+    if (plan.attendance.length > 1) {
+      const settled = plan.attendance[1];
+      if (settled) {
+        const loadedFrom = cache.loadedFrom ?? "";
+        if (!loadedFrom || settled[0] < loadedFrom) cache.loadedFrom = settled[0];
+        // 只有这一段碰到了近 30 天才算「核对过」；只补更早的历史时不算
+        if (settled[1] > shiftKey(today, -SETTLED_RECHECK_DAYS)) cache.recheckedAt = nowMs;
+      }
+    } else if (!cache.loadedFrom) {
+      cache.loadedFrom = recentFrom;
+    }
 
-    // 加班审批（勾了「飞书加班审批」才拉）。先清掉关注区间里旧的标记：撤回 / 被拒的要消失
-    if (source.overtime) {
-      const start = dateFromKey(cache.watchFrom);
-      const approvals = await fetchOvertimeApprovals({
+    // 加班审批（勾了「飞书加班审批」才拉，到点才拉）
+    if (source.overtime && plan.overtime) {
+      const sinceMs = (dateFromKey(plan.overtime.sinceDate)?.getTime() ?? nowMs);
+      const result = await fetchOvertimeApprovals({
         credentials: source.credentials,
         dataDir: source.dataDir,
         approvalName: source.overtime.approvalName,
-        // 申请先于加班发起：从关注区间起点再往前 31 天
-        sinceSeconds: Math.floor(((start?.getTime() ?? Date.now()) - 31 * 86_400_000) / 1000),
+        sinceSeconds: Math.floor(sinceMs / 1000),
+        ...(plan.overtime.definitionCode ? { definitionCode: plan.overtime.definitionCode } : {}),
       });
-      for (const day of Object.values(cache.days)) {
-        if (day.date >= cache.watchFrom && day.date <= cache.watchTo) delete day.overtimeApproval;
-      }
-      for (const approval of approvals.values()) {
-        if (approval.date < cache.watchFrom || approval.date > cache.watchTo) continue;
-        const day = cache.days[approval.date] ?? { date: approval.date, kind: "rest" as const };
-        day.overtimeApproval = { start: approval.start, end: approval.end, status: approval.status };
-        cache.days[approval.date] = day;
+      if (result) {
+        // 先清掉这个窗口里旧的标记：撤回 / 被拒的要消失
+        for (const day of Object.values(cache.days)) {
+          if (day.date >= plan.overtime.sinceDate) delete day.overtimeApproval;
+        }
+        for (const approval of result.approvals.values()) {
+          const day = cache.days[approval.date] ?? { date: approval.date, kind: "rest" as const };
+          day.overtimeApproval = { start: approval.start, end: approval.end, status: approval.status };
+          cache.days[approval.date] = day;
+        }
+        cache.overtimeAt = nowMs;
+        cache.overtimeName = source.overtime.approvalName;
+        if (result.definitionCode) cache.overtimeCode = result.definitionCode;
+        if (plan.overtime.mode === "full" && (!cache.overtimeFrom || plan.overtime.sinceDate < cache.overtimeFrom)) {
+          cache.overtimeFrom = plan.overtime.sinceDate;
+        }
       }
     }
     cache.fetchedAt = Date.now();
     saveCache(source.dataDir, cache);
     logger.info("考勤缓存已刷新", {
       code: "FEISHU_ATTENDANCE_REFRESHED",
-      detail: { from: cache.watchFrom, to: cache.watchTo, days: days.length },
+      detail: {
+        segments: plan.attendance.length,
+        days: fetched,
+        overtime: plan.overtime ? plan.overtime.mode : "skip",
+      },
     });
   } catch (error) {
     logger.warn("考勤刷新失败，日历上会少几个角标", {

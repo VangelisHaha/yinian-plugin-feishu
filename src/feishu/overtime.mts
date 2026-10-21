@@ -20,7 +20,7 @@ import { apiRequest } from "./request.mjs";
 
 const INITIATED_PATH = "/open-apis/approval/v4/instances/initiated";
 
-/** 一页 100 条、最多翻 5 页：没有 definition_code 时一页里混着各种审批。 */
+/** 一页 100 条。没有 definition_code 时最多翻 5 页（一页里混着各种审批），有了只翻 1 页。 */
 const PAGE_SIZE = 100;
 const MAX_PAGES = 5;
 
@@ -95,6 +95,12 @@ export function foldOvertimeApprovals(
  * 拉本人发起的审批并折成每天的加班时段。失败只记日志、返回空——加班审批是锦上添花，
  * 拉不到就退回「休息日打卡 = 加班」那条老判据，不该连带考勤一起失败。
  */
+export interface OvertimeFetchResult {
+  approvals: Map<string, OvertimeApproval>;
+  /** 认到的「加班申请」审批定义 code。下次带上它翻页就很少，不用在所有审批里捞。 */
+  definitionCode: string | undefined;
+}
+
 export async function fetchOvertimeApprovals(options: {
   credentials: Credentials;
   dataDir: string;
@@ -103,11 +109,14 @@ export async function fetchOvertimeApprovals(options: {
   sinceSeconds: number;
   /** 发起时间上界（秒），缺省现在 + 1 天。 */
   untilSeconds?: number;
-}): Promise<Map<string, OvertimeApproval>> {
+  /** 已知的审批定义 code：带上就只查这一种审批。 */
+  definitionCode?: string;
+}): Promise<OvertimeFetchResult | null> {
   const instances: InitiatedInstance[] = [];
   let pageToken = "";
   try {
-    for (let page = 0; page < MAX_PAGES; page += 1) {
+    const maxPages = options.definitionCode ? 1 : MAX_PAGES;
+    for (let page = 0; page < maxPages; page += 1) {
       const query: Record<string, string> = {
         page_size: String(PAGE_SIZE),
         locale: "zh-CN",
@@ -116,6 +125,7 @@ export async function fetchOvertimeApprovals(options: {
         end_timestamp: String(options.untilSeconds ?? Math.floor(Date.now() / 1000) + 86_400),
       };
       if (pageToken) query["page_token"] = pageToken;
+      if (options.definitionCode) query["definition_code"] = options.definitionCode;
       const data = await apiRequest<InitiatedResponse>({
         credentials: options.credentials,
         dataDir: options.dataDir,
@@ -135,7 +145,14 @@ export async function fetchOvertimeApprovals(options: {
         hint: "要在开放平台申请 approval:instance:read，并在插件设置里勾「飞书加班审批」后重新授权",
       },
     });
-    return new Map();
+    // 失败返回 null 而不是空表：调用方据此**保留**已有的「加」，不能把一次网络抖动当成「申请都没了」
+    return null;
   }
-  return foldOvertimeApprovals(instances, options.approvalName || DEFAULT_OVERTIME_APPROVAL_NAME);
+  const name = options.approvalName || DEFAULT_OVERTIME_APPROVAL_NAME;
+  return {
+    approvals: foldOvertimeApprovals(instances, name),
+    definitionCode:
+      instances.find((item) => item.definition_name === name)?.definition_code ??
+      options.definitionCode,
+  };
 }
